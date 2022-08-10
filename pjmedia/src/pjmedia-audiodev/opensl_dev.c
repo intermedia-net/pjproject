@@ -730,7 +730,7 @@ static pj_status_t opensl_create_stream(pjmedia_aud_dev_factory *f,
     
 on_error:
     strm_destroy(&stream->base);
-    return status;
+    return opensl_to_pj_error(result);
 }
 
 /* API: Get stream parameters */
