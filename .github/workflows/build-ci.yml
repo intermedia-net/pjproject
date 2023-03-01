@@ -1,0 +1,60 @@
+name: Build Android release
+
+on:
+  push:
+    tags:
+     - '*'
+
+env:
+  RELEASE_ARCHIVE_NAME: android-release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: 
+      image: rinekri/pjsip-android-builder:latest  # TODO: replace with actual image when it will be uploaded
+      volumes:
+        - ${{ github.workspace }}:/home/tools/pjproject ## TODO: replace with actual volume
+        - ${{ github.workspace }}:/home/output/pjsip-build-output ## TODO: replace with actual volume
+      options: --user root
+    steps:
+      - 
+        name: Checkout code
+        uses: actions/checkout@v3
+      -
+        name: Build library
+        run: |
+          cd /home
+          ./build
+      - 
+        name: Create release asset 
+        env: 
+          LIB_PATH: ${{ github.workspace }}/lib
+          JAVA_PATH: ${{ github.workspace }}/java
+          LOGS_PATH: ${{ github.workspace }}/logs
+        run: |
+          pwd
+          ls
+          tar -zcvf "$RELEASE_ARCHIVE_NAME".tar.gz -C "$LIB_PATH" "$JAVA_PATH" "$LOGS_PATH"
+      - 
+        name: Create release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Android release ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+      - 
+        name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSET_PATH: ${{ github.workspace }}/${{ env.RELEASE_ARCHIVE_NAME }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.ASSET_PATH }}.tar.gz
+          asset_name: ${{ env.RELEASE_ARCHIVE_NAME }}.tar.gz
+          asset_content_type: application/zip
