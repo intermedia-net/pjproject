@@ -14,10 +14,10 @@ jobs:
     permissions:
       contents: write
     container: 
-      image: rinekri/pjsip-android-builder:latest  # TODO: replace with actual image when it will be uploaded
+      image: rinekri/pjsip-android-builder:latest  # TODO: replace with intermedia image when it will be uploaded
       volumes:
-        - ${{ github.workspace }}:/home/tools/pjproject ## TODO: replace with actual volume
-        - ${{ github.workspace }}:/home/output/pjsip-build-output ## TODO: replace with actual volume
+        - ${{ github.workspace }}:/home/tools/pjproject 
+        - ${{ github.workspace }}:/home/output/pjsip-build-output
       options: --user root
     steps:
       - 
@@ -31,13 +31,11 @@ jobs:
       - 
         name: Create release asset 
         env: 
-          LIB_PATH: ${{ github.workspace }}/lib
-          JAVA_PATH: ${{ github.workspace }}/java
-          LOGS_PATH: ${{ github.workspace }}/logs
+          PJSIP_OUTPUT_PATH: ${{ github.workspace }}/android
         run: |
           pwd
-          ls
-          tar -zcvf "$RELEASE_ARCHIVE_NAME".tar.gz -C "$LIB_PATH" "$JAVA_PATH" "$LOGS_PATH"
+          ls $PJSIP_OUTPUT_PATH
+          tar -czvf "$RELEASE_ARCHIVE_NAME".tar.gz -C "$PJSIP_OUTPUT_PATH" .
       - 
         name: Create release
         env:
