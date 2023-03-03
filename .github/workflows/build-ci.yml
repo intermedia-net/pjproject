@@ -11,6 +11,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     container: 
       image: rinekri/pjsip-android-builder:latest  # TODO: replace with actual image when it will be uploaded
       volumes:
@@ -38,23 +40,12 @@ jobs:
           tar -zcvf "$RELEASE_ARCHIVE_NAME".tar.gz -C "$LIB_PATH" "$JAVA_PATH" "$LOGS_PATH"
       - 
         name: Create release
-        id: create_release
-        uses: actions/create-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSET_PATH: ${{ github.workspace }}/${{ env.RELEASE_ARCHIVE_NAME }}
+        id: create_release
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Android release ${{ github.ref_name }}
+          name: Android release ${{ github.ref_name }}
+          artifacts: ${{ env.ASSET_PATH }}.tar.gz
           draft: true
           prerelease: false
-      - 
-        name: Upload release asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ASSET_PATH: ${{ github.workspace }}/${{ env.RELEASE_ARCHIVE_NAME }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ env.ASSET_PATH }}.tar.gz
-          asset_name: ${{ env.RELEASE_ARCHIVE_NAME }}.tar.gz
-          asset_content_type: application/zip
