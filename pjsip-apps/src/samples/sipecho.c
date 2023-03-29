@@ -372,7 +372,8 @@ static pjmedia_sdp_session *create_answer(int call_num, pj_pool_t *pool,
         PJ_LOG(3,(THIS_FILE, "  Media %d, %.*s: %s <--> %.*s:%d",
                   mi, (int)m->desc.media.slen, m->desc.media.ptr,
                   (our_dir ? our_dir : "sendrecv"),
-                  (int)c->addr.slen, c->addr.ptr, m->desc.port));
+                  (c? (int)c->addr.slen : 6), (c? c->addr.ptr : "(none)"),
+                  m->desc.port));
     }
 
     return answer;
@@ -528,8 +529,26 @@ static pj_bool_t on_rx_request( pjsip_rx_data *rdata )
         status = pjsip_inv_send_msg(call->inv, tdata);
 
     if (status != PJ_SUCCESS) {
-        pjsip_endpt_respond_stateless( app.sip_endpt, rdata,
-                                       500, NULL, NULL, NULL);
+        pjsip_transaction *tsx;
+
+        app_perror(THIS_FILE, "Unable to create/send 1xx/200 response", status);
+
+        tsx = pjsip_rdata_get_tsx(rdata);
+        if (tsx == NULL || tsx->state >= PJSIP_TSX_STATE_TERMINATED) {
+            /* Respond statelessly if tsx is stateless or already terminated */
+            status = pjsip_endpt_respond_stateless( app.sip_endpt, rdata,
+                                                    500, NULL, NULL, NULL);
+        } else {
+            /* Otherwise, respond statefully */
+            status = pjsip_endpt_create_response( app.sip_endpt, rdata,
+                                                  500, NULL, &tdata);
+            if (status == PJ_SUCCESS)
+                status = pjsip_tsx_send_msg(tsx, tdata);
+        }
+        if (status != PJ_SUCCESS) {
+            app_perror(THIS_FILE, "Unable to create/send 500 response",
+                       status);
+        }
         destroy_call(call);
     } else {
         call->inv->mod_data[mod_sipecho.id] = call;

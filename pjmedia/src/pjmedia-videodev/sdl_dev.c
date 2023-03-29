@@ -281,7 +281,7 @@ pjmedia_vid_dev_factory* pjmedia_sdl_factory(pj_pool_factory *pf)
     struct sdl_factory *f;
     pj_pool_t *pool;
 
-    pool = pj_pool_create(pf, "sdl video", 1000, 1000, NULL);
+    pool = pj_pool_create(pf, "sdl video", 4000, 4000, NULL);
     f = PJ_POOL_ZALLOC_T(pool, struct sdl_factory);
     f->pf = pf;
     f->pool = pool;
@@ -632,7 +632,7 @@ static sdl_fmt_info* get_sdl_format_info(pjmedia_format_id id)
 {
     unsigned i;
 
-    for (i = 0; i < sizeof(sdl_fmts)/sizeof(sdl_fmts[0]); i++) {
+    for (i = 0; i < PJ_ARRAY_SIZE(sdl_fmts); i++) {
         if (sdl_fmts[i].fmt_id == id)
             return &sdl_fmts[i];
     }

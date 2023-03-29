@@ -1363,6 +1363,8 @@ PJ_DEF(pj_status_t) pjsip_dlg_send_request( pjsip_dialog *dlg,
         }
 
     } else {
+        dlg->ack_sent = PJ_TRUE;
+
         /* Set transport selector */
         pjsip_tx_data_set_transport(tdata, &dlg->tp_sel);
 
@@ -1944,8 +1946,7 @@ void pjsip_dlg_on_rx_response( pjsip_dialog *dlg, pjsip_rx_data *rdata )
      */
     if ((dlg->state == PJSIP_DIALOG_STATE_NULL &&
          pjsip_method_creates_dialog(&rdata->msg_info.cseq->method) &&
-         (res_code > 100 && res_code < 300) &&
-         rdata->msg_info.to->tag.slen)
+         (res_code > 100 && res_code < 300))
          ||
         (dlg->role==PJSIP_ROLE_UAC &&
          !dlg->uac_has_2xx &&
@@ -2080,7 +2081,8 @@ void pjsip_dlg_on_rx_response( pjsip_dialog *dlg, pjsip_rx_data *rdata )
         pj_status_t status;
 
         if (rdata->msg_info.cseq->method.id==PJSIP_INVITE_METHOD &&
-            rdata->msg_info.msg->line.status.code/100 == 2)
+            rdata->msg_info.msg->line.status.code/100 == 2 &&
+            !dlg->ack_sent)
         {
             pjsip_tx_data *ack;
 
@@ -2290,7 +2292,7 @@ PJ_DEF(const pjsip_hdr*) pjsip_dlg_get_remote_cap_hdr(pjsip_dialog *dlg,
 
     hdr = dlg->rem_cap_hdr.next;
     while (hdr != &dlg->rem_cap_hdr) {
-        if ((htype != PJSIP_H_OTHER && htype == hdr->type) ||
+        if ((htype != PJSIP_H_OTHER && htype == (int)hdr->type) ||
             (htype == PJSIP_H_OTHER && pj_stricmp(&hdr->name, hname) == 0))
         {
             pjsip_dlg_dec_lock(dlg);

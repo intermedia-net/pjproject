@@ -545,6 +545,20 @@
 
 
 /**
+ * If enabled, when allocating memory, pool will only search for a maximum
+ * number of blocks specified before deciding that the pool is full and
+ * a new memory block needs to be created.
+ *
+ * Set it to 0 to disable the limitation (i.e. it will search all blocks).
+ *
+ * Default: 5
+ */
+#ifndef PJ_POOL_MAX_SEARCH_BLOCK_COUNT
+#   define PJ_POOL_MAX_SEARCH_BLOCK_COUNT 5
+#endif
+
+
+/**
  * Enable timer debugging facility. When this is enabled, application
  * can call pj_timer_heap_dump() to show the contents of the timer
  * along with the source location where the timer entries were scheduled.
@@ -654,10 +668,10 @@
  * Libraries sometimes needs to make copy of an address to stack buffer;
  * the value here affects the stack usage.
  *
- * Default: 128
+ * Default: 253
  */
 #ifndef PJ_MAX_HOSTNAME
-#  define PJ_MAX_HOSTNAME           (128)
+#  define PJ_MAX_HOSTNAME           (253)
 #endif
 
 /**
@@ -994,14 +1008,20 @@
  * Secure socket implementation.
  * Select one of these implementations in PJ_SSL_SOCK_IMP.
  */
-#define PJ_SSL_SOCK_IMP_NONE        0   /**< Disable SSL socket.    */
-#define PJ_SSL_SOCK_IMP_OPENSSL     1   /**< Using OpenSSL.         */
-#define PJ_SSL_SOCK_IMP_GNUTLS      2   /**< Using GnuTLS.          */
-#define PJ_SSL_SOCK_IMP_DARWIN      3   /**< Using Apple's Secure
-                                             Transport (deprecated in
-                                             MacOS 10.15 & iOS 13.0)*/
-#define PJ_SSL_SOCK_IMP_APPLE       4   /**< Using Apple's Network 
-                                             framework.             */
+/** Disable SSL socket */
+#define PJ_SSL_SOCK_IMP_NONE        0
+
+/** Using OpenSSL */
+#define PJ_SSL_SOCK_IMP_OPENSSL     1
+
+/**< Using GnuTLS */
+#define PJ_SSL_SOCK_IMP_GNUTLS      2
+
+/** Using Apple's Secure Transport (deprecated in MacOS 10.15 & iOS 13.0) */
+#define PJ_SSL_SOCK_IMP_DARWIN      3
+
+/** Using Apple's Network framework */
+#define PJ_SSL_SOCK_IMP_APPLE       4
 
 /**
  * Select which SSL socket implementation to use. Currently pjlib supports

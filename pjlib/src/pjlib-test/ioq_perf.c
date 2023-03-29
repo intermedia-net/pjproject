@@ -549,7 +549,7 @@ static int ioqueue_perf_test_imp(const pj_ioqueue_cfg *cfg)
     PJ_LOG(3,(THIS_FILE, "   ======================================="));
 
     best_bandwidth = 0;
-    for (i=0; i<(int)(sizeof(test_param)/sizeof(test_param[0])); ++i) {
+    for (i=0; i<(int)PJ_ARRAY_SIZE(test_param); ++i) {
         pj_size_t bandwidth;
 
         rc = perform_test(cfg,
@@ -602,7 +602,7 @@ int ioqueue_perf_test(void)
     int i, rc;
 
     /* Defailed performance report (concurrency=1) */
-    for (i=0; i<PJ_ARRAY_SIZE(epoll_flags); ++i) {
+    for (i=0; i<(int)PJ_ARRAY_SIZE(epoll_flags); ++i) {
         pj_ioqueue_cfg_default(&cfg);
         cfg.epoll_flags = epoll_flags[i];
 
@@ -637,7 +637,7 @@ int ioqueue_perf_test(void)
         return rc;
 
     /* The benchmark across configs */
-    for (i=0; i<PJ_ARRAY_SIZE(epoll_flags); ++i) {
+    for (i=0; i<(int)PJ_ARRAY_SIZE(epoll_flags); ++i) {
         int concur;
         for (concur=0; concur<2; ++concur) {
             pj_ioqueue_cfg_default(&cfg);
