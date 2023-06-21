@@ -186,6 +186,7 @@ typedef struct pjmedia_rtcp_stream_stat
     unsigned        loss;       /**< Total number of packets lost           */
     unsigned        reorder;    /**< Total number of out of order packets   */
     unsigned        dup;        /**< Total number of duplicates packets     */
+    unsigned        nack_cnt;   /**< Total number of NACK packets           */
 
     pj_math_stat    loss_period;/**< Loss period statistics (in usec)       */
 

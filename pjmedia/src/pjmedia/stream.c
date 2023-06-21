@@ -2221,6 +2221,7 @@ on_return:
             stream->rtcp_fb_nack.blp <<= 1;
             stream->rtcp_fb_nack.blp |= 1;
         }
+        stream->rtcp.stat.tx.nack_cnt += seq_st.diff - 1;
 
         /* Send it immediately */
         status = send_rtcp(stream, PJ_TRUE, PJ_FALSE, PJ_FALSE, PJ_TRUE);
