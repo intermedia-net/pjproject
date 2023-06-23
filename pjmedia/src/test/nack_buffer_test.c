@@ -26,32 +26,29 @@ static int test_that_new_packets_added(pjmedia_nack_buffer *buffer) {
 }
 
 static int test_that_packet_is_found_in_buffer_by_pid(pjmedia_nack_buffer *buffer) {
-    pjmedia_rtcp_fb_nack first_nack;
-    pjmedia_rtcp_fb_nack second_nack;
-    first_nack.pid = 1;
-    first_nack.blp = 0;
-    second_nack.pid = 2;
-    second_nack.blp = 0;
-
-    pj_status_t first_push_result = pjmedia_nack_buffer_push(buffer, first_nack);
-    if (first_push_result != PJ_SUCCESS) {
-        return first_push_result; 
-    }
-    pj_status_t second_push_result = pjmedia_nack_buffer_push(buffer, second_nack); 
-    if (second_push_result != PJ_SUCCESS) {
-        return second_push_result; 
+    uint16_t pids[2] = { 1, 2 };
+    unsigned index;
+    for (index = 0; index < PJ_ARRAY_SIZE(pids); index++) {
+        pjmedia_rtcp_fb_nack nack;
+        nack.pid = pids[index];
+        nack.blp = 0;
+        pj_status_t status = pjmedia_nack_buffer_push(buffer, nack);
+        if (status != PJ_SUCCESS) {
+            return status; 
+        }
     }
 
-    pj_bool_t is_first_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, 1);
-    pj_bool_t is_second_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, 2);
-
-    if (!is_first_packet_found || !is_second_packet_found) {
-        PJ_LOG(3,(THIS_FILE, "Packet was not found in nack buffer"));
-        return -1;
+    for (index = 0; index < PJ_ARRAY_SIZE(pids); index++) {
+        pj_bool_t is_found = pjmedia_nack_buffer_frame_dequeued(buffer, pids[index]);
+        if (!is_found) {
+            PJ_LOG(3,(THIS_FILE, "Packet %u was not found in nack buffer", pids[index]));
+            return -1;
+        }
     }
+    
     unsigned length = pjmedia_nack_buffer_len(buffer);
-    if (length != 1) {
-        PJ_LOG(3,(THIS_FILE, "nack buffer must have one packet"));
+    if (length > 0) {
+        PJ_LOG(3,(THIS_FILE, "nack buffer must be empty"));
         return -1; 
     }
     return 0;
@@ -74,9 +71,9 @@ static int test_that_packet_is_found_in_buffer_by_blp(pjmedia_nack_buffer *buffe
         return second_push_result; 
     }
 
-    unsigned lost_packets[3] = { 2, 3, 21 };
+    unsigned lost_packets[2] = { 2, 21 };
     unsigned index;
-    for (index = 0; index < 3; index++) {
+    for (index = 0; index < PJ_ARRAY_SIZE(lost_packets); index++) {
         pj_bool_t is_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, lost_packets[index]);
         if (!is_packet_found) {
            PJ_LOG(3,(THIS_FILE, "Packet %u was not found in nack buffer", lost_packets[index])); 
@@ -84,8 +81,8 @@ static int test_that_packet_is_found_in_buffer_by_blp(pjmedia_nack_buffer *buffe
         }
     }
     unsigned length = pjmedia_nack_buffer_len(buffer);
-    if (length != 1) {
-        PJ_LOG(3,(THIS_FILE, "nack buffer must have one packet"));
+    if (length > 0) {
+        PJ_LOG(3,(THIS_FILE, "nack buffer must be empty"));
         return -1; 
     }
     return 0;
@@ -104,7 +101,7 @@ static int test_that_not_added_packet_is_not_found_in_buffer(pjmedia_nack_buffer
 
     unsigned not_added_packets[3] = { 4, 22, 50 };
     unsigned index;
-    for (index = 0; index < 3; index++) {
+    for (index = 0; index < PJ_ARRAY_SIZE(not_added_packets); index++) {
         pj_bool_t is_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, not_added_packets[index]);
         if (is_packet_found) {
            PJ_LOG(3,(THIS_FILE, "Unexpeted packet %u was found in nack buffer", not_added_packets[index])); 
@@ -194,7 +191,7 @@ static int test_that_packet_found_when_integer_overflow_happend(pjmedia_nack_buf
            return -1;
         }
         unsigned length = pjmedia_nack_buffer_len(buffer);
-        unsigned expected_len = PJ_ARRAY_SIZE(packets) - index;
+        unsigned expected_len = PJ_ARRAY_SIZE(packets) - index - 1;
         if (length != expected_len) {
             PJ_LOG(3,(THIS_FILE, "Unexpected buffer length: %u. Expected: %u", length, expected_len));
             return -1; 
@@ -209,20 +206,16 @@ static int test_that_packet_found_by_blp_when_integer_overflow_happend(pjmedia_n
     nack.blp = 0b11;
     pjmedia_nack_buffer_push(buffer, nack);
 
-    uint16_t packets[2] = { 1, 2 };
-    unsigned index;
-    for (index = 0; index < PJ_ARRAY_SIZE(packets); index++) {
-        pj_bool_t is_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, packets[index]);
-        if (!is_packet_found) {
-            PJ_LOG(3,(THIS_FILE, "Packet %u was not found.", packets[index])); 
-            return -1;
-        } 
-    }
-    pj_bool_t is_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, 3);
-    if (is_packet_found) {
-        PJ_LOG(3,(THIS_FILE, "Unxepected packet was found")); 
+    pj_bool_t is_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, 2);
+    if (!is_packet_found) {
+        PJ_LOG(3,(THIS_FILE, "Packet 2 was not found.")); 
         return -1;
-    } 
+    }
+    unsigned length = pjmedia_nack_buffer_len(buffer);
+    if (length > 0) {
+        PJ_LOG(3,(THIS_FILE, "Nack buffer must be empty"));
+        return -1; 
+    }
     return 0;
 }
 
@@ -274,7 +267,7 @@ int nack_buffer_test()
     }
 
     unsigned test_index;
-    int result;
+    int result = 0;
     for (test_index = 0; test_index < PJ_ARRAY_SIZE(test); test_index++) {
         PJ_LOG(3, (THIS_FILE,"  test %d: %s", test_index, test[test_index].title));
 
@@ -295,5 +288,5 @@ int nack_buffer_test()
     }
 
     pj_pool_release(pool);
-    return -1;
+    return result;
 }

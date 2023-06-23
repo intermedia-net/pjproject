@@ -291,7 +291,8 @@ PJ_DECL(void) pjmedia_jbuf_put_frame2( pjmedia_jbuf *jb,
                                        pj_size_t size, 
                                        pj_uint32_t bit_info,
                                        int frame_seq,
-                                       pj_bool_t *discarded);
+                                       pj_bool_t *discarded,
+                                       pj_uint16_t packet_seq);
 
 /**
  * Put a frame to the jitter buffer. If the frame can be accepted (based
@@ -319,7 +320,8 @@ PJ_DECL(void) pjmedia_jbuf_put_frame3( pjmedia_jbuf *jb,
                                        pj_uint32_t bit_info,
                                        int frame_seq,
                                        pj_uint32_t frame_ts,
-                                       pj_bool_t *discarded);
+                                       pj_bool_t *discarded,
+                                       pj_uint16_t packet_seq);
 /**
  * Get a frame from the jitter buffer. The jitter buffer will return the
  * oldest frame from it's buffer, when it is available.
@@ -369,7 +371,8 @@ PJ_DECL(void) pjmedia_jbuf_get_frame2(pjmedia_jbuf *jb,
                                       void *frame, 
                                       pj_size_t *size, 
                                       char *p_frm_type,
-                                      pj_uint32_t *bit_info);
+                                      pj_uint32_t *bit_info,
+                                      pj_uint16_t *packet_seq);
 
 
 /**
@@ -396,7 +399,8 @@ PJ_DECL(void) pjmedia_jbuf_get_frame3(pjmedia_jbuf *jb,
                                       char *p_frm_type,
                                       pj_uint32_t *bit_info,
                                       pj_uint32_t *ts,
-                                      int *seq);
+                                      int *seq,
+                                      pj_uint16_t *packet_seq);
 
 
 /**

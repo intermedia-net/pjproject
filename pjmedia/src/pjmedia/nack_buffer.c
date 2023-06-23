@@ -16,10 +16,10 @@ struct pjmedia_nack_buffer {
     pjmedia_rtcp_fb_nack *packets;
 };
 
-static pj_bool_t blp_contains(pjmedia_rtcp_fb_nack *packet, uint16_t sequence_num) {
+static pj_bool_t blp_contains(pjmedia_rtcp_fb_nack *packet, pj_uint16_t sequence_num) {
     PJ_ASSERT_RETURN(sequence_num != packet->pid, PJ_FALSE);
 
-    uint16_t diff;
+    pj_uint16_t diff;
     if (sequence_num < packet->pid) {
         diff = 0xFFFF - packet->pid + sequence_num; 
     } else {
@@ -66,6 +66,9 @@ pjmedia_nack_buffer_push(pjmedia_nack_buffer *buffer,
         buffer->tail = (buffer->tail + 1) % buffer->size;
     }
 
+    PJ_LOG(3, (THIS_FILE, "debug Nacked packet with pid: %u, blp: %u was added!", nack->pid, nack->blp));
+    PJ_LOG(3, (THIS_FILE, "debug Buffer length: %u.", buffer->count));
+
     buffer->packets[buffer->head] = nack;
     buffer->head = (buffer->head + 1) % buffer->size;
 
@@ -75,12 +78,12 @@ pjmedia_nack_buffer_push(pjmedia_nack_buffer *buffer,
 // Function to check if a packet with the given sequence number was NACKed and remove older packets.
 PJ_DECL(pj_bool_t)
 pjmedia_nack_buffer_frame_dequeued(pjmedia_nack_buffer *buffer,
-                                   uint16_t sequence_num) {
+                                   pj_uint16_t sequence_num) {
     if (buffer->count == 0) {
         return PJ_FALSE; 
     }
 
-    static uint16_t half_uint16 = 0xFFFF / 2;
+    static pj_uint16_t half_uint16 = 0xFFFF / 2;
     
     int lower = 0;
     int upper = buffer->count - 1;
@@ -89,10 +92,10 @@ pjmedia_nack_buffer_frame_dequeued(pjmedia_nack_buffer *buffer,
     // Perform a binary search for the packet with the closest PID <= the sequence number
     while (lower <= upper) {
         int middle = (lower + upper) / 2;
-        uint16_t pid = buffer->packets[(buffer->tail + middle) % buffer->size].pid;
+        pj_uint16_t pid = buffer->packets[(buffer->tail + middle) % buffer->size].pid;  
 
         if (pid <= sequence_num) {
-            if (sequence_num - pid > half_uint16) {
+            if (sequence_num - pid < half_uint16) {
                 index = middle;
                 lower = middle + 1;
             } else {
@@ -114,15 +117,16 @@ pjmedia_nack_buffer_frame_dequeued(pjmedia_nack_buffer *buffer,
 
     pjmedia_rtcp_fb_nack *packet = &buffer->packets[(buffer->tail + index) % buffer->size];
 
+    // Remove all older packets
+    buffer->tail = (buffer->tail + index + 1) % buffer->size;
+    buffer->count -= index + 1;
+
+     PJ_LOG(3, (THIS_FILE, "debug Buffer length: %u", buffer->count));
+
     if (packet->pid == sequence_num || blp_contains(packet, sequence_num)) {
-        // Remove all older packets
-        buffer->tail = (buffer->tail + index) % buffer->size;
-        buffer->count -= index;
+        PJ_LOG(3, (THIS_FILE, "debug Nacked packet %u was played", sequence_num));
         return PJ_TRUE;
     } else {
-        // Remove all older packets
-        buffer->tail = (buffer->tail + index + 1) % buffer->size;
-        buffer->count -= index + 1;
         return PJ_FALSE;
     }
 }

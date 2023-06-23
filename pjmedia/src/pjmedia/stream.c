@@ -21,6 +21,7 @@
 #include <pjmedia/rtp.h>
 #include <pjmedia/rtcp.h>
 #include <pjmedia/jbuf.h>
+#include <pjmedia/nack_buffer.h>
 #include <pj/array.h>
 #include <pj/assert.h>
 #include <pj/ctype.h>
@@ -164,6 +165,8 @@ struct pjmedia_stream
     char                     jb_last_frm;   /**< Last frame type from jb    */
     unsigned                 jb_last_frm_cnt;/**< Last JB frame type counter*/
     unsigned                 soft_start_cnt;/**< Stream soft start counter */
+
+    pjmedia_nack_buffer     *nack_buffer;    /**< Nack buffer                */
 
     pjmedia_rtcp_session     rtcp;          /**< RTCP for incoming RTP.     */
 
@@ -590,8 +593,14 @@ static pj_status_t get_frame( pjmedia_port *port, pjmedia_frame *frame)
         }
 
         /* Get frame from jitter buffer. */
+        pj_uint16_t packet_seq;
         pjmedia_jbuf_get_frame2(stream->jb, channel->out_pkt, &frame_size,
-                                &frame_type, &bit_info);
+                                &frame_type, &bit_info, &packet_seq);
+        
+        pj_bool_t is_nacked_frame = pjmedia_nack_buffer_frame_dequeued(stream->nack_buffer, packet_seq);
+        if (is_nacked_frame) {
+            stream->rtcp.stat.tx.useful_nack_cnt += 1;
+        }
 
 #if TRACE_JB
         trace_jb_get(stream, frame_type, frame_size);
@@ -871,8 +880,14 @@ static pj_status_t get_frame_ext( pjmedia_port *port, pjmedia_frame *frame)
         pj_mutex_lock( stream->jb_mutex );
 
         /* Get frame from jitter buffer. */
+        pj_uint16_t packet_seq; 
         pjmedia_jbuf_get_frame2(stream->jb, channel->out_pkt, &frame_size,
-                                &frame_type, &bit_info);
+                                &frame_type, &bit_info, &packet_seq);
+
+        pj_bool_t is_nacked_frame = pjmedia_nack_buffer_frame_dequeued(stream->nack_buffer, packet_seq);
+        if (is_nacked_frame) {
+            stream->rtcp.stat.tx.useful_nack_cnt += 1;
+        }
 
 #if TRACE_JB
         trace_jb_get(stream, frame_type, frame_size);
@@ -2173,7 +2188,7 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
 
             ext_seq = (unsigned)(frames[i].timestamp.u64 / ts_span);
             pjmedia_jbuf_put_frame2(stream->jb, frames[i].buf, frames[i].size,
-                                    frames[i].bit_info, ext_seq, &discarded);
+                                    frames[i].bit_info, ext_seq, &discarded, hdr->seq);
             if (discarded)
                 pkt_discarded = PJ_TRUE;
         }
@@ -2222,6 +2237,11 @@ on_return:
             stream->rtcp_fb_nack.blp |= 1;
         }
         stream->rtcp.stat.tx.nack_cnt += seq_st.diff - 1;
+        status = pjmedia_nack_buffer_push(stream->nack_buffer, stream->rtcp_fb_nack);
+
+        if (status != PJ_SUCCESS) {
+           PJ_PERROR(4,(THIS_FILE, status, "Failed to push NACK packet to the buffer"));
+        }
 
         /* Send it immediately */
         status = send_rtcp(stream, PJ_TRUE, PJ_FALSE, PJ_FALSE, PJ_TRUE);
@@ -2723,6 +2743,11 @@ PJ_DEF(pj_status_t) pjmedia_stream_create( pjmedia_endpt *endpt,
                                  jb_max, &stream->jb);
     if (status != PJ_SUCCESS)
         goto err_cleanup;
+    
+    status = pjmedia_nack_buffer_create(pool, 100, &stream->nack_buffer);
+    if (status != PJ_SUCCESS) {
+        goto err_cleanup; 
+    }
 
 
     /* Set up jitter buffer */
