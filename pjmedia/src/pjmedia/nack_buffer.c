@@ -66,7 +66,7 @@ pjmedia_nack_buffer_push(pjmedia_nack_buffer *buffer,
         buffer->tail = (buffer->tail + 1) % buffer->size;
     }
 
-    PJ_LOG(3, (THIS_FILE, "debug Nacked packet with pid: %u, blp: %u was added!", nack->pid, nack->blp));
+    PJ_LOG(3, (THIS_FILE, "debug Nacked packet with pid: %u, blp: %u was added!", nack.pid, nack.blp));
     PJ_LOG(3, (THIS_FILE, "debug Buffer length: %u.", buffer->count));
 
     buffer->packets[buffer->head] = nack;
