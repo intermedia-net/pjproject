@@ -176,6 +176,56 @@ static int test_that_old_packets_removed_from_buffer_when_more_recent_packet_pla
     return 0;
 }
 
+static int test_that_packet_found_when_integer_overflow_happend(pjmedia_nack_buffer *buffer) {
+    uint16_t packets[5] = { 0xFFFB, 0xFFFF, 5, 15, 100 };
+    unsigned index;
+
+    for (index = 0; index < PJ_ARRAY_SIZE(packets); index++) {
+        pjmedia_rtcp_fb_nack nack; 
+        nack.pid = packets[index];
+        nack.blp = 0;
+        pjmedia_nack_buffer_push(buffer, nack);
+    }
+
+    for (index = 0; index < PJ_ARRAY_SIZE(packets); index++) {
+        pj_bool_t is_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, packets[index]);
+        if (!is_packet_found) {
+           PJ_LOG(3,(THIS_FILE, "Packet %u was not found.", packets[index])); 
+           return -1;
+        }
+        unsigned length = pjmedia_nack_buffer_len(buffer);
+        unsigned expected_len = PJ_ARRAY_SIZE(packets) - index;
+        if (length != expected_len) {
+            PJ_LOG(3,(THIS_FILE, "Unexpected buffer length: %u. Expected: %u", length, expected_len));
+            return -1; 
+        }
+    }
+    return 0;
+}
+
+static int test_that_packet_found_by_blp_when_integer_overflow_happend(pjmedia_nack_buffer *buffer) {
+    pjmedia_rtcp_fb_nack nack; 
+    nack.pid = 0xFFFF;
+    nack.blp = 0b11;
+    pjmedia_nack_buffer_push(buffer, nack);
+
+    uint16_t packets[2] = { 1, 2 };
+    unsigned index;
+    for (index = 0; index < PJ_ARRAY_SIZE(packets); index++) {
+        pj_bool_t is_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, packets[index]);
+        if (!is_packet_found) {
+            PJ_LOG(3,(THIS_FILE, "Packet %u was not found.", packets[index])); 
+            return -1;
+        } 
+    }
+    pj_bool_t is_packet_found = pjmedia_nack_buffer_frame_dequeued(buffer, 3);
+    if (is_packet_found) {
+        PJ_LOG(3,(THIS_FILE, "Unxepected packet was found")); 
+        return -1;
+    } 
+    return 0;
+}
+
 static struct test
 {
     const char *title;
@@ -205,6 +255,14 @@ static struct test
     {
         "Old packet removed when frame from more recent packet played",
         test_that_old_packets_removed_from_buffer_when_more_recent_packet_played
+    },
+    {
+        "Packet found by PID when integer overflow happend",
+        test_that_packet_found_when_integer_overflow_happend
+    },
+    {
+        "Packet found by BLP when integer overflow happend",
+        test_that_packet_found_by_blp_when_integer_overflow_happend
     }
 };
 

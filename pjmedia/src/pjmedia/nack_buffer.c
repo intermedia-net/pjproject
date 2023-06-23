@@ -17,10 +17,16 @@ struct pjmedia_nack_buffer {
 };
 
 static pj_bool_t blp_contains(pjmedia_rtcp_fb_nack *packet, uint16_t sequence_num) {
-    PJ_ASSERT_RETURN(sequence_num > packet->pid, PJ_FALSE);
-    uint16_t diff = sequence_num - packet->pid;
+    PJ_ASSERT_RETURN(sequence_num != packet->pid, PJ_FALSE);
 
-    if (diff <= 16 && (packet->blp & (1 << diff - 1))) {
+    uint16_t diff;
+    if (sequence_num < packet->pid) {
+        diff = 0xFFFF - packet->pid + sequence_num; 
+    } else {
+        diff = sequence_num - packet->pid;
+    }
+
+    if (diff <= 16 && (packet->blp & (1 << (diff - 1)))) {
         return PJ_TRUE;
     } else {
         return PJ_FALSE;
@@ -73,6 +79,8 @@ pjmedia_nack_buffer_frame_dequeued(pjmedia_nack_buffer *buffer,
     if (buffer->count == 0) {
         return PJ_FALSE; 
     }
+
+    static uint16_t half_uint16 = 0xFFFF / 2;
     
     int lower = 0;
     int upper = buffer->count - 1;
@@ -84,14 +92,21 @@ pjmedia_nack_buffer_frame_dequeued(pjmedia_nack_buffer *buffer,
         uint16_t pid = buffer->packets[(buffer->tail + middle) % buffer->size].pid;
 
         if (pid <= sequence_num) {
-            index = middle;
-            lower = middle + 1;
+            if (sequence_num - pid > half_uint16) {
+                index = middle;
+                lower = middle + 1;
+            } else {
+                upper = middle - 1;
+            }
         } else {
-            upper = middle - 1;
+            if (pid - sequence_num < half_uint16) {
+                upper = middle - 1; 
+            } else {
+                index = middle;
+                lower = middle + 1; 
+            }
         }
     }
-
-    PJ_LOG(3,(THIS_FILE, "Packet %u. Index: %i", sequence_num, index));
 
     if (index == -1) {
         return PJ_FALSE;
@@ -99,16 +114,12 @@ pjmedia_nack_buffer_frame_dequeued(pjmedia_nack_buffer *buffer,
 
     pjmedia_rtcp_fb_nack *packet = &buffer->packets[(buffer->tail + index) % buffer->size];
 
-    PJ_LOG(3,(THIS_FILE, "Found packet pid %u.", packet->pid));
-
     if (packet->pid == sequence_num || blp_contains(packet, sequence_num)) {
-        PJ_LOG(3,(THIS_FILE, "Packet found"));
         // Remove all older packets
         buffer->tail = (buffer->tail + index) % buffer->size;
         buffer->count -= index;
         return PJ_TRUE;
     } else {
-        PJ_LOG(3,(THIS_FILE, "Packet not found"));
         // Remove all older packets
         buffer->tail = (buffer->tail + index + 1) % buffer->size;
         buffer->count -= index + 1;
