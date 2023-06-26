@@ -100,6 +100,8 @@ struct RtcpStreamStat
     unsigned        loss;       /**< Total number of packets lost           */
     unsigned        reorder;    /**< Total number of out of order packets   */
     unsigned        dup;        /**< Total number of duplicates packets     */
+    unsigned        nackCount;  /**< Total number of NACK packets           */
+    unsigned        usefulNackCount;/**< Total number of played NACK packets*/
     
     MathStat        lossPeriodUsec; /**< Loss period statistics             */
 
