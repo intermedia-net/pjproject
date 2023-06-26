@@ -2057,6 +2057,7 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
      */
     pj_mutex_lock( stream->jb_mutex );
     if (seq_st.status.flag.restart) {
+        pjmedia_nack_buffer_reset(stream->nack_buffer);
         status = pjmedia_jbuf_reset(stream->jb);
         PJ_LOG(4,(stream->port.info.name.ptr, "Jitter buffer reset"));
     } else {
@@ -3261,6 +3262,7 @@ PJ_DEF(pj_status_t) pjmedia_stream_pause( pjmedia_stream *stream,
         /* Also reset jitter buffer */
         pj_mutex_lock( stream->jb_mutex );
         pjmedia_jbuf_reset(stream->jb);
+        pjmedia_nack_buffer_reset(stream->nack_buffer);
         pj_mutex_unlock( stream->jb_mutex );
 
         PJ_LOG(4,(stream->port.info.name.ptr, "Decoder stream paused"));

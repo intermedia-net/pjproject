@@ -45,12 +45,18 @@ pjmedia_nack_buffer_create(pj_pool_t *pool,
     PJ_ASSERT_RETURN(nack_buffer->packets != NULL, PJ_ENOMEM);
 
     nack_buffer->size = size;
-    nack_buffer->count = 0;
-    nack_buffer->head = 0;
-    nack_buffer->tail = 0;
+    pjmedia_nack_buffer_reset(nack_buffer);
 
     *buffer = nack_buffer;
     return PJ_SUCCESS;
+}
+
+PJ_DEF(void)
+pjmedia_nack_buffer_reset(pjmedia_nack_buffer *buffer) {
+    PJ_LOG(3, (THIS_FILE, "Nack buffer restarted."));
+    buffer->count = 0;
+    buffer->head = 0;
+    buffer->tail = 0;
 }
 
 PJ_DEF(pj_status_t)

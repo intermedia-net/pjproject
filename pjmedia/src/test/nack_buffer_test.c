@@ -219,6 +219,24 @@ static int test_that_packet_found_by_blp_when_integer_overflow_happend(pjmedia_n
     return 0;
 }
 
+static int test_buffer_reset(pjmedia_nack_buffer *buffer) {
+    unsigned index;
+    for (index = 0; index <= PJ_MAX(BUFFER_SIZE, 10); index++) {
+        pjmedia_rtcp_fb_nack nack;
+        nack.pid = (uint16_t)index;
+        nack.blp = 0;
+        pj_status_t result = pjmedia_nack_buffer_push(buffer, nack);
+        if (result != PJ_SUCCESS) {
+            return result; 
+        }
+    }
+    if (pjmedia_nack_buffer_len(buffer) > 0) {
+        PJ_LOG(3, (THIS_FILE, "Nack buffer must be empty."));
+        return -1;
+    }
+    return 0;
+}
+
 static struct test
 {
     const char *title;
@@ -256,6 +274,10 @@ static struct test
     {
         "Packet found by BLP when integer overflow happend",
         test_that_packet_found_by_blp_when_integer_overflow_happend
+    },
+    {
+        "Buffer reset",
+        test_buffer_reset
     }
 };
 
