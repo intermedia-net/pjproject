@@ -230,6 +230,7 @@ static int test_buffer_reset(pjmedia_nack_buffer *buffer) {
             return result; 
         }
     }
+    pjmedia_nack_buffer_reset(buffer);
     if (pjmedia_nack_buffer_len(buffer) > 0) {
         PJ_LOG(3, (THIS_FILE, "Nack buffer must be empty."));
         return -1;
