@@ -21,7 +21,7 @@ pjmedia_nack_buffer_create(pj_pool_t *pool,
                           unsigned size,
                           pjmedia_nack_buffer **buffer);
 
-PJ_DECL(void)
+PJ_DECL(pj_status_t)
 pjmedia_nack_buffer_reset(pjmedia_nack_buffer *buffer);
 
 PJ_DECL(pj_status_t)
