@@ -66,8 +66,7 @@ pjmedia_nack_buffer_push(pjmedia_nack_buffer *buffer,
         buffer->tail = (buffer->tail + 1) % buffer->size;
     }
 
-    PJ_LOG(3, (THIS_FILE, "debug Nacked packet with pid: %u, blp: %u was added!", nack.pid, nack.blp));
-    PJ_LOG(3, (THIS_FILE, "debug Buffer length: %u.", buffer->count));
+    PJ_LOG(3, (THIS_FILE, "Nacked packet with pid: %u, blp: %u was added!", nack.pid, nack.blp));
 
     buffer->packets[buffer->head] = nack;
     buffer->head = (buffer->head + 1) % buffer->size;
@@ -79,6 +78,7 @@ pjmedia_nack_buffer_push(pjmedia_nack_buffer *buffer,
 PJ_DECL(pj_bool_t)
 pjmedia_nack_buffer_frame_dequeued(pjmedia_nack_buffer *buffer,
                                    pj_uint16_t sequence_num) {
+
     if (buffer->count == 0) {
         return PJ_FALSE; 
     }
@@ -121,10 +121,7 @@ pjmedia_nack_buffer_frame_dequeued(pjmedia_nack_buffer *buffer,
     buffer->tail = (buffer->tail + index + 1) % buffer->size;
     buffer->count -= index + 1;
 
-     PJ_LOG(3, (THIS_FILE, "debug Buffer length: %u", buffer->count));
-
     if (packet->pid == sequence_num || blp_contains(packet, sequence_num)) {
-        PJ_LOG(3, (THIS_FILE, "debug Nacked packet %u was played", sequence_num));
         return PJ_TRUE;
     } else {
         return PJ_FALSE;

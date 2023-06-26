@@ -755,11 +755,14 @@ static pj_status_t get_frame( pjmedia_port *port, pjmedia_frame *frame)
             break;
 
         } else {
-            pj_bool_t is_nacked_frame = pjmedia_nack_buffer_frame_dequeued(stream->nack_buffer, packet_seq);
-            if (is_nacked_frame) {
-                stream->rtcp.stat.tx.useful_nack_cnt += 1;
-            }
             /* Got "NORMAL" frame from jitter buffer */
+            if (stream->send_rtcp_fb_nack) {
+                pj_bool_t is_nacked_frame = pjmedia_nack_buffer_frame_dequeued(stream->nack_buffer, packet_seq);
+                if (is_nacked_frame) {
+                    stream->rtcp.stat.tx.useful_nack_cnt += 1;
+                }
+            }
+
             pjmedia_frame frame_in, frame_out;
             pj_bool_t use_dec_buf = PJ_FALSE;
 
@@ -892,9 +895,11 @@ static pj_status_t get_frame_ext( pjmedia_port *port, pjmedia_frame *frame)
 
         if (frame_type == PJMEDIA_JB_NORMAL_FRAME) {
             /* Got "NORMAL" frame from jitter buffer */
-            pj_bool_t is_nacked_frame = pjmedia_nack_buffer_frame_dequeued(stream->nack_buffer, packet_seq);
-            if (is_nacked_frame) {
-                stream->rtcp.stat.tx.useful_nack_cnt += 1;
+            if (stream->send_rtcp_fb_nack) {
+                pj_bool_t is_nacked_frame = pjmedia_nack_buffer_frame_dequeued(stream->nack_buffer, packet_seq);
+                if (is_nacked_frame) {
+                    stream->rtcp.stat.tx.useful_nack_cnt += 1;
+                }
             }
 
             pjmedia_frame frame_in;
@@ -2191,7 +2196,6 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
             if (discarded)
                 pkt_discarded = PJ_TRUE;
         }
-        PJ_LOG(3, (THIS_FILE, "Packet %u received", pj_ntohs(hdr->seq)));
 
 #if TRACE_JB
         trace_jb_put(stream, hdr, payloadlen, count);
@@ -2744,7 +2748,7 @@ PJ_DEF(pj_status_t) pjmedia_stream_create( pjmedia_endpt *endpt,
     if (status != PJ_SUCCESS)
         goto err_cleanup;
     
-    status = pjmedia_nack_buffer_create(pool, 100, &stream->nack_buffer);
+    status = pjmedia_nack_buffer_create(pool, 20, &stream->nack_buffer);
     if (status != PJ_SUCCESS) {
         goto err_cleanup; 
     }
