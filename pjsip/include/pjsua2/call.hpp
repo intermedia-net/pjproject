@@ -92,22 +92,22 @@ struct LossType
  */
 struct RtcpStreamStat
 {
-    TimeVal         update;     /**< Time of last update.                   */
-    unsigned        updateCount;/**< Number of updates (to calculate avg)   */
-    unsigned        pkt;        /**< Total number of packets                */
-    unsigned        bytes;      /**< Total number of payload/bytes          */
-    unsigned        discard;    /**< Total number of discarded packets.     */
-    unsigned        loss;       /**< Total number of packets lost           */
-    unsigned        reorder;    /**< Total number of out of order packets   */
-    unsigned        dup;        /**< Total number of duplicates packets     */
-    unsigned        nackCount;  /**< Total number of NACK packets           */
-    unsigned        usefulNackCount;/**< Total number of played NACK packets*/
+    TimeVal         update;     /**< Time of last update.                           */
+    unsigned        updateCount;/**< Number of updates (to calculate avg)           */
+    unsigned        pkt;        /**< Total number of packets                        */
+    unsigned        bytes;      /**< Total number of payload/bytes                  */
+    unsigned        discard;    /**< Total number of discarded packets.             */
+    unsigned        loss;       /**< Total number of packets lost                   */
+    unsigned        reorder;    /**< Total number of out of order packets           */
+    unsigned        dup;        /**< Total number of duplicates packets             */
+    unsigned        nackCount;  /**< Total number of packets requested using NACK   */
+    unsigned        usefulNackCount;/**< Total number of played NACK packets        */
     
-    MathStat        lossPeriodUsec; /**< Loss period statistics             */
+    MathStat        lossPeriodUsec; /**< Loss period statistics                     */
 
-    LossType        lossType;   /**< Types of loss detected.                */
+    LossType        lossType;   /**< Types of loss detected.                        */
     
-    MathStat        jitterUsec; /**< Jitter statistics                      */
+    MathStat        jitterUsec; /**< Jitter statistics                              */
     
 public:
     /**
@@ -671,7 +671,7 @@ public:
     void fromPj(const pjsua_stream_info &info);
 };
 
-#if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC!=0)
+#if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC==0)
 
 /**
  * OPUS codec status.
@@ -711,7 +711,7 @@ struct StreamStat
      */
     JbufState   jbuf;
 
-#if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC!=0)
+#if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC==0)
 
     /**
      * OPUS codec stat
