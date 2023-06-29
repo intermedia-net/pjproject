@@ -671,7 +671,7 @@ public:
     void fromPj(const pjsua_stream_info &info);
 };
 
-#if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC==0)
+#if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC!=0)
 
 /**
  * OPUS codec status.
@@ -711,7 +711,7 @@ struct StreamStat
      */
     JbufState   jbuf;
 
-#if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC==0)
+#if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC!=0)
 
     /**
      * OPUS codec stat
