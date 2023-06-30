@@ -38,7 +38,7 @@ esac
 done
 
 function check_or_exit() {
-    if [ ! -e "$2" ]; then
+    if [ -z "$2" ]; then
         echo Please specify "$1"
         exit 1
     fi
