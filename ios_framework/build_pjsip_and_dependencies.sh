@@ -205,7 +205,7 @@ function clean_pjsip_libs () {
     done
 }
 
-function _cleanup() {
+function cleanup() {
     rm -rf $BUILD_DIR
 }
 
