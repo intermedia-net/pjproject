@@ -49,8 +49,8 @@ check_or_exit "output directory using --output-dir" $output_dir
 check_or_exit "source directory using --source-dir" $source_dir
 check_or_exit "source BCG729 directory using --bcg729" $bcg729_dir
 check_or_exit "source OpenSSL directory using --openssl" $openssl_dir
-check_or_exit "source Opus directory using --opus" $source_dir
-check_or_exit "config site" $config_site
+check_or_exit "source Opus directory using --opus" $opus_dir
+check_or_exit "config site using --config-site" $config_site
 
 export MIN_IOS_VERSION=$min_ios_version
 BUILD_ARCHS=(
@@ -68,25 +68,13 @@ PJSIP_LIB_PATHS=(
 )
 BUILD_DIR="$PWD/tmp"
 
-function build_ssl () {
-    echo "Build openssl..."
-    cd $openssl_dir
-    sh ./openssl.sh
-    echo "Using SSL..."
-}
-
-function build_opus () {
-    echo "Build opus..."
-    cd $opus_dir
-    sh ./opus.sh
-    echo "Using OPUS..."
-}
-
-function build_bcg729 () {
-    echo "Build BCG729..."
-    cd $bcg729_dir
-    sh ./bcg729.sh
-    echo "Using BCG729..."
+function build_dependency() {
+    if [ -z $DEV_MODE ] || [ ! -d "$1/build" ]; then
+        echo "Building $1"
+        cd $2
+        sh "$1.sh"
+        echo "$1 build completed."
+    fi
 }
 
 function build_archs () {
@@ -217,13 +205,13 @@ function clean_pjsip_libs () {
     done
 }
 
-function cleanup() {
+function _cleanup() {
     rm -rf $BUILD_DIR
 }
 
-build_ssl
-build_opus
-build_bcg729
+build_dependency "openssl" $openssl_dir
+build_dependency "opus" $opus_dir
+build_dependency "bcg729" $bcg729_dir
 build_archs
 assemble_final_libs
 cleanup

@@ -41,6 +41,13 @@ function checker() {
     which "$1" | grep -o "$1"  > /dev/null &&  return 0 || return 1
 }
 
+function check_and_install() {
+    if ! checker $1 == 1; then
+        echo $1 not installed. Installing it...
+        brew install $1
+    fi
+}
+
 function check_prerequisites () {
     echo "Verifying that we have everything that's needed for building pjsip"
 
@@ -51,21 +58,10 @@ function check_prerequisites () {
         echo "Exiting script"
         exit
     fi
-
-    declare -i found_dependency_counter=0
-
-    if checker make == 1 ; then echo "make: Installed"; found_dependency_counter=$((found_dependency_counter+1)); else echo "make: Not Installed!"; fi
-    if checker cmake == 1 ; then echo "cmake: Installed"; found_dependency_counter=$((found_dependency_counter+1)); else echo "cmake: Not Installed!"; fi
-    if checker automake == 1 ; then echo "automake: Installed"; found_dependency_counter=$((found_dependency_counter+1)); else echo "automake: Not Installed!"; fi
-    if checker autoconf == 1 ; then echo "autoconf: Installed"; found_dependency_counter=$((found_dependency_counter+1)); else echo "autoconf: Not Installed!"; fi
-
-    if [ "$found_dependency_counter" == "4" ]; then 
-        echo "Everything in place and ready"; 
-    else 
-        echo "Some required utility isn't found, check previous log entries."
-        echo "Exiting script"
-        exit
-    fi
+    check_and_install make
+    check_and_install cmake
+    check_and_install automake
+    check_and_install autoconf
 }
 
 function build_pjsip() {
@@ -82,7 +78,7 @@ function build_pjsip() {
     arguments="$arguments --bcg729=$BASE_DIR/bcg729"
     arguments="$arguments --config-site=$BASE_DIR/config_site.h"
 
-    sh ./build.sh $arguments
+    sh ./build_pjsip_and_dependencies.sh $arguments
 }
 
 function assemble_pjsip() {
