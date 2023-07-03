@@ -8,7 +8,7 @@
 #                                                                         #
 VERSION="1.3.1"   
 if test "x${MIN_IOS_VERSION}" = "x"; then
-  MIN_IOS_VERSION="12.0"
+  MIN_IOS_VERSION="14.0"
   echo "$F: MIN_IOS_VERSION is not specified, using ${MIN_IOS_VERSION}"
 fi                                                   #
 #                                                                         #
