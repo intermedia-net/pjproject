@@ -210,10 +210,15 @@ PJ_DEF(pj_status_t) pjsua_call_get_stream_stat( pjsua_call_id call_id,
             status = pjmedia_stream_get_stat_jbuf(call_med->strm.a.stream,
                                                   &stat->jbuf);
 #if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC!=0)
-        status2 = pjmedia_stream_get_stat_codec(call_med->strm.a.stream,
-                                                &stat->opus_stat);
-        if (status2 != PJ_SUCCESS) {
-            PJ_LOG(3, (THIS_FILE, "Unable to obtain OPUS codec statistics!"));
+        pjmedia_stream *stream = call_med->strm.a.stream;
+        pjmedia_stream_info stream_info;
+        status2 = pjmedia_stream_get_info(stream, &stream_info);
+        if (status2 == PJ_SUCCESS && !pj_stricmp2(&stream_info.fmt.encoding_name, "opus")) {
+            status2 = pjmedia_stream_get_stat_codec(stream,
+                                                    &stat->opus_stat);
+            if (status2 != PJ_SUCCESS) {
+                PJ_LOG(3, (THIS_FILE, "Unable to obtain OPUS codec statistics!"));
+            }
         }
 #endif
         break;
