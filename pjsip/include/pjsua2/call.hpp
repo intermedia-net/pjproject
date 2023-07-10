@@ -672,7 +672,7 @@ public:
 };
 
 /**
- * Codec status.
+ * Codec statistics.
  */
 struct CodecStat
 {
