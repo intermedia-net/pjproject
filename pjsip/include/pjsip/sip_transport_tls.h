@@ -132,6 +132,11 @@ typedef struct pjsip_tls_on_verify_param {
      */
     pj_ssl_cert_info *remote_cert_info;
 
+    /**
+     * The SSL socket instance.
+     */
+    pj_ssl_sock_t *ssock;
+
 } pjsip_tls_on_verify_param;
 
 
@@ -354,7 +359,8 @@ typedef struct pjsip_tls_setting
     /**
      * Specify options to be set on the transport. 
      *
-     * By default there is no options.
+     * By default, this is unset, which means that the underlying sockopt
+     * params as returned by #pj_ssl_sock_param_default() will be used.
      * 
      */
     pj_sockopt_params sockopt_params;
@@ -369,6 +375,13 @@ typedef struct pjsip_tls_setting
     pj_bool_t sockopt_ignore_error;
 
     /**
+     * Specify if renegotiation is enabled for TLSv1.2 or earlier.
+     *
+     * Default: PJ_TRUE
+     */
+    pj_bool_t enable_renegotiation;
+
+    /**
      * Callback to be called when a accept operation of the TLS listener fails.
      *
      * @param param         The parameter to the callback.
@@ -378,6 +391,10 @@ typedef struct pjsip_tls_setting
     /**
      * Callback to be called to verify a new connection.  Currently it's only 
      * implemented for OpenSSL backend.
+     *
+     * If this is set, the callback will always be invoked, even when peer
+     * verification is disabled (pjsip_tls_setting.verify_server/verify_client
+     * set to PJ_FALSE).
      *
      * @param param         The parameter to the callback.
      * 
@@ -419,6 +436,7 @@ PJ_INLINE(void) pjsip_tls_setting_default(pjsip_tls_setting *tls_opt)
     tls_opt->qos_ignore_error = PJ_TRUE;
     tls_opt->sockopt_ignore_error = PJ_TRUE;
     tls_opt->proto = PJSIP_SSL_DEFAULT_PROTO;
+    tls_opt->enable_renegotiation = PJ_TRUE;
 }
 
 

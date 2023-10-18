@@ -1341,11 +1341,11 @@ static pj_status_t destroy_transport( pjsip_tpmgr *mgr,
                         pj_hash_set_np(mgr->table, &tp_next->tp->key, key_len,
                                        hval, tp_next->tp_buf, tp_next);
                         TRACE_((THIS_FILE, "Hash entry updated after "
-                                           "transport %d being destroyed",
+                                           "transport %s being destroyed",
                                            tp->obj_name));
                     } else {
                         TRACE_((THIS_FILE, "Hash entry deleted after "
-                                           "transport %d being destroyed",
+                                           "transport %s being destroyed",
                                            tp->obj_name));
                     }
                 }
@@ -2104,7 +2104,7 @@ PJ_DEF(pj_ssize_t) pjsip_tpmgr_receive_packet( pjsip_tpmgr *mgr,
              */
             if (tmp.slen) {
                 PJ_LOG(2, (THIS_FILE,
-                      "Dropping %d bytes packet from %s %s:%d %.*s\n",
+                      "Dropping %ld bytes packet from %s %s:%d %.*s\n",
                       msg_fragment_size,
                       rdata->tp_info.transport->type_name,
                       rdata->pkt_info.src_name,

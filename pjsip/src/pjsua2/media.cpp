@@ -77,8 +77,8 @@ void ConfPortInfo::fromPj(const pjsua_conf_port_info &port_info)
     portId = port_info.slot_id;
     name = pj2Str(port_info.name);
     format.fromPj(port_info.format);
-    txLevelAdj = port_info.tx_level_adj;
-    rxLevelAdj = port_info.rx_level_adj;
+    txLevelAdj = port_info.rx_level_adj;
+    rxLevelAdj = port_info.tx_level_adj;
 
     /*
     format.id = PJMEDIA_FORMAT_PCM;
@@ -268,6 +268,7 @@ AudioMedia* AudioMedia::typecastFromMedia(Media *media)
 AudioMediaPort::AudioMediaPort()
 : pool(NULL)
 {
+    pj_bzero(&port, sizeof(port));
 }
 
 AudioMediaPort::~AudioMediaPort()
@@ -735,7 +736,7 @@ class DevAudioMedia : public AudioMedia
 {
 public:
     DevAudioMedia();
-    ~DevAudioMedia();
+    virtual ~DevAudioMedia();
 };
 
 DevAudioMedia::DevAudioMedia()
@@ -1944,9 +1945,9 @@ pjmedia_codec_param CodecParam::toPj() const
     param.info.max_bps= (pj_uint32_t)info.maxBps;
     param.info.max_rx_frame_size = info.maxRxFrameSize;
     param.info.frm_ptime = (pj_uint16_t)info.frameLen;
-    param.info.frm_ptime_denum = (pj_uint16_t)info.frameLenDenum;
+    param.info.frm_ptime_denum = (pj_uint8_t)info.frameLenDenum;
     param.info.enc_ptime = (pj_uint16_t)info.encFrameLen;
-    param.info.enc_ptime_denum = (pj_uint16_t)info.encFrameLenDenum;
+    param.info.enc_ptime_denum = (pj_uint8_t)info.encFrameLenDenum;
     param.info.pcm_bits_per_sample = (pj_uint8_t)info.pcmBitsPerSample;
     param.info.pt = (pj_uint8_t)info.pt;
     param.info.fmt_id = info.fmtId;

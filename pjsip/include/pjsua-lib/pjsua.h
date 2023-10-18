@@ -90,11 +90,11 @@ PJ_BEGIN_DECL
  *
  * Few samples are provided:
  *
-  - @ref page_pjsip_sample_simple_pjsuaua_c \n
+  - Simple pjsua app: \src{pjsip-apps/src/samples/simple_pjsua.c} \n
     Very simple SIP User Agent with registration, call, and media, using
     PJSUA-API, all in under 200 lines of code.
 
-  - @ref page_pjsip_samples_pjsua \n
+  - Pjsua app: \srcdir{pjsip-apps/src/pjsua/} \n
     This is the reference implementation for PJSIP and PJMEDIA.
     PJSUA is a console based application, designed to be simple enough
     to be readble, but powerful enough to demonstrate all features
@@ -1081,6 +1081,63 @@ typedef struct pjsua_call_setting
 
 
 /**
+ * This will contain the information passed from the callback 
+ * \a pjsua_on_rejected_incoming_call_cb.
+ */
+typedef struct pjsua_on_rejected_incoming_call_param {
+    /**
+     * The incoming call id. This will be set to PJSUA_INVALID_ID when there is
+     * no available call slot at the time.
+     */
+    pjsua_call_id   call_id;
+
+    /** 
+     * Local URI.
+     */
+    pj_str_t        local_info;
+
+    /** 
+     * Remote URI.
+     */
+    pj_str_t        remote_info;
+
+    /** 
+     * Rejection code.
+     */
+    int             st_code;
+
+    /**
+     * Rejection text.
+     */
+    pj_str_t        st_text;
+
+    /** 
+     * The original INVITE message, if it's not available this will be set
+     * to NULL.
+     */
+    pjsip_rx_data  *rdata;
+    
+    /** 
+     * Internal.
+     */
+    struct {
+        char    local_info[PJSIP_MAX_URL_SIZE];
+        char    remote_info[PJSIP_MAX_URL_SIZE];
+    } buf_;
+
+} pjsua_on_rejected_incoming_call_param;
+
+/**
+  * Type of callback to be called when incoming call is rejected.
+  *
+  * @param param      The rejected call information.
+  *
+  */
+typedef void (*pjsua_on_rejected_incoming_call_cb)(
+                           const pjsua_on_rejected_incoming_call_param *param);
+
+
+/**
  * This structure describes application callback to receive various event
  * notification from PJSUA-API. All of these callbacks are OPTIONAL,
  * although definitely application would want to implement some of
@@ -1161,7 +1218,7 @@ typedef struct pjsua_callback
      * called *after* the session has been created). The application may change
      * some stream info parameter values, i.e: jb_init, jb_min_pre, jb_max_pre,
      * jb_max, use_ka, rtcp_sdes_bye_disabled, jb_discard_algo (audio),
-     * codec_param->enc_fmt (video).
+     * rx_event_pt (audio), codec_param->enc_fmt (video).
      *
      * @param call_id       Call identification.
      * @param param         The on stream precreate callback parameter.
@@ -1966,6 +2023,23 @@ typedef struct pjsua_callback
      * @param event     The media event.
      */
     void (*on_media_event)(pjmedia_event *event);
+
+    /**
+     * This callback will be invoked when the library implicitly rejects
+     * an incoming call.
+     * 
+     * In addition to being declined explicitly using the 
+     * #pjsua_call_answer()/#pjsua_call_answer2() method,
+     * the library may also automatically reject the incoming call due 
+     * to different scenarios, e.g:
+     * - no available call slot.
+     * - no available account to handle the call.
+     * - when an incoming INVITE is received with, for instance, a message 
+     *   containing invalid SDP.
+     *
+     * See also #pjsua_on_rejected_incoming_call_cb.
+     */
+    pjsua_on_rejected_incoming_call_cb on_rejected_incoming_call;
 
 } pjsua_callback;
 
