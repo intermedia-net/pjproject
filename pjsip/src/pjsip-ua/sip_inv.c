@@ -698,13 +698,25 @@ static pj_bool_t mod_inv_on_rx_request(pjsip_rx_data *rdata)
             }
 
             /* Now we can terminate the INVITE transaction */
-            pj_assert(inv->invite_tsx->status_code >= 200);
-            pjsip_tsx_terminate(inv->invite_tsx, 
-                                inv->invite_tsx->status_code);
+            if (inv->invite_tsx->status_code/100 == 2) {
+                pjsip_tsx_terminate(inv->invite_tsx,
+                                    inv->invite_tsx->status_code);
+            } else {
+                /* If the response was not 2xx, the ACK is considered part of
+                 * the INVITE transaction, so should have been handled by
+                 * the transaction.
+                 * But for best effort, we will also attempt to terminate
+                 * the tsx here. However, we need to do it asynchronously
+                 * to avoid deadlock.
+                 */
+                pjsip_tsx_terminate_async(inv->invite_tsx,
+                                          inv->invite_tsx->status_code);
+            }
             inv->invite_tsx = NULL;
+
             if (inv->last_answer) {
-                    pjsip_tx_data_dec_ref(inv->last_answer);
-                    inv->last_answer = NULL;
+                pjsip_tx_data_dec_ref(inv->last_answer);
+                inv->last_answer = NULL;
             }
         }
 
@@ -2669,10 +2681,16 @@ PJ_DEF(pj_status_t) pjsip_inv_initial_answer(   pjsip_inv_session *inv,
             goto on_return;
         }
         status2 = pjsip_timer_update_resp(inv, tdata);
-        if (status2 == PJ_SUCCESS)
+        if (status2 == PJ_SUCCESS) {
+            inv->last_answer = tdata;
             *p_tdata = tdata;
-        else
+        } else {
+            /* To avoid leak, we need to decrement 2 times since
+             * pjsip_dlg_modify_response() increment tdata ref count.
+             */
             pjsip_tx_data_dec_ref(tdata);
+            pjsip_tx_data_dec_ref(tdata);
+        }
 
         goto on_return;
     }
@@ -2755,6 +2773,10 @@ PJ_DEF(pj_status_t) pjsip_inv_answer(   pjsip_inv_session *inv,
     /* Process SDP in answer */
     status = process_answer(inv, st_code, last_res, local_sdp);
     if (status != PJ_SUCCESS) {
+        /* To avoid leak, we need to decrement 2 times since 
+         * pjsip_dlg_modify_response() increment tdata ref count.
+         */
+        pjsip_tx_data_dec_ref(last_res);
         pjsip_tx_data_dec_ref(last_res);
         goto on_return;
     }
@@ -3795,9 +3817,9 @@ PJ_DEF(pj_status_t) pjsip_inv_send_msg( pjsip_inv_session *inv,
          * request.
          */
         cseq = (pjsip_cseq_hdr*)pjsip_msg_find_hdr(tdata->msg, PJSIP_H_CSEQ, NULL);
-        PJ_ASSERT_RETURN(cseq != NULL
+        PJ_ASSERT_ON_FAIL(cseq != NULL
                           && (inv->invite_tsx && cseq->cseq == inv->invite_tsx->cseq),
-                         PJ_EINVALIDOP);
+                          { pjsip_tx_data_dec_ref(tdata); return PJ_EINVALIDOP; });
 
         if (inv->options & PJSIP_INV_REQUIRE_100REL) {
             status = pjsip_100rel_tx_response(inv, tdata);
