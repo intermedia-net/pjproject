@@ -2281,6 +2281,7 @@ on_return:
         nlost = PJ_MIN(seq_st.diff - 1, 17);
         first_seq = pj_ntohs(hdr->seq) - nlost;
 
+        int i;
         pj_bzero(&stream->rtcp_fb_nack, sizeof(stream->rtcp_fb_nack));
         stream->rtcp_fb_nack.pid = pj_ntohs(hdr->seq) - seq_st.diff + 1;
         for (i = 1; i < (seq_st.diff - 1); ++i) {
