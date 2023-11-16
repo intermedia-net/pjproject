@@ -191,7 +191,8 @@ PJ_DEF(pj_status_t) pjsua_call_get_stream_stat( pjsua_call_id call_id,
 {
     pjsua_call *call;
     pjsua_call_media *call_med;
-    pj_status_t status = PJ_EINVAL;
+    pj_status_t status;
+    pj_status_t status2;
 
     PJ_ASSERT_RETURN(call_id>=0 && call_id<(int)pjsua_var.ua_cfg.max_calls,
                      PJ_EINVAL);
@@ -219,6 +220,13 @@ PJ_DEF(pj_status_t) pjsua_call_get_stream_stat( pjsua_call_id call_id,
         if (status == PJ_SUCCESS)
             status = pjmedia_stream_get_stat_jbuf(call_med->strm.a.stream,
                                                   &stat->jbuf);
+
+        pjmedia_codec_stat_default(&stat->codec_stat);
+        status2 = pjmedia_stream_get_codec_stat(call_med->strm.a.stream,
+                                                &stat->codec_stat);
+        if (status2 != PJ_SUCCESS && status2 != PJ_ENOTSUP) {
+            PJ_LOG(3, (THIS_FILE, "Unable to obtain codec statistics!"));
+        }
         break;
 #if defined(PJMEDIA_HAS_VIDEO) && (PJMEDIA_HAS_VIDEO != 0)
     case PJMEDIA_TYPE_VIDEO:

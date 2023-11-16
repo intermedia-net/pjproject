@@ -346,6 +346,16 @@ PJ_DECL(pj_status_t) pjmedia_stream_get_stat( const pjmedia_stream *stream,
  */
 PJ_DECL(pj_status_t) pjmedia_stream_reset_stat(pjmedia_stream *stream);
 
+/**
+ * Get the stream codec statistics.
+ *
+ * @param stream        The media stream.
+ * @param stat          Media stream codec statistics.
+ *
+ * @return              PJ_SUCCESS on success.
+ */
+PJ_DEF(pj_status_t) pjmedia_stream_get_codec_stat( const pjmedia_stream *stream,
+                                                   pjmedia_codec_stat *codec_stat );
 
 #if defined(PJMEDIA_HAS_RTCP_XR) && (PJMEDIA_HAS_RTCP_XR != 0)
 /**
