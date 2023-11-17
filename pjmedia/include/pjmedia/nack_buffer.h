@@ -30,7 +30,7 @@ pjmedia_nack_buffer_push(pjmedia_nack_buffer *buffer,
 
 PJ_DECL(pj_bool_t)
 pjmedia_nack_buffer_frame_dequeued(pjmedia_nack_buffer *buffer,
-                                   uint16_t sequence_num);
+                                   pj_uint16_t sequence_num);
 
 unsigned pjmedia_nack_buffer_len(pjmedia_nack_buffer *buffer);
 
