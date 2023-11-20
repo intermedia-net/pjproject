@@ -29,6 +29,13 @@ jobs:
         PR_TITLE="Automated Pull Request"
         PR_BODY="This pull request was automatically created by a GitHub Actions workflow."
 
+        echo "TOKEN: $TOKEN"
+        echo "REPO_OWNER: $REPO_OWNER"
+        echo "REPO_NAME: $REPO_NAME"
+        echo "SOURCE_BRANCH: $SOURCE_BRANCH"
+        echo "TARGET_BRANCH: $TARGET_BRANCH"
+        echo "PR_TITLE: $PR_TITLE"
+        echo "PR_BODY: $PR_BODY"
         curl -X POST \
           -H "Authorization: token $TOKEN" \
           -H "Accept: application/vnd.github.v3+json" \
