@@ -16,7 +16,6 @@ jobs:
         uses: actions/checkout@v3
         with:
           ref: master
-          token: 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
 
       - name: Set up upstream
         run: |
@@ -34,18 +33,12 @@ jobs:
 
       - name: Merge upstream/master into master
         run: |
-          git status
-          git diff --merge upstream/master
           if git merge --ff-only --allow-unrelated-histories upstream/master || git merge --allow-unrelated-histories -m "Merge upstream/master into master" upstream/master; then
-            git status
-            echo ""
-            SLACK_MESSAGE="Update Master workflow executed successfully."
             curl -X POST --data-urlencode "payload={\"channel\": \"#unite-mobile-pjproject\", \"username\": \"ci-bot\", \"text\": \":azure-check-mark: *Merge upstream/master to master* successful! <https://github.com/intermedia-net/pjproject/actions/workflows/update-master.yml|Click here> for details! \", \"icon_emoji\": \":unite:\"}" ${{ secrets.SLACK_WEBHOOK_URL }}
           else
-            git status
-            echo "Merge conflict detected!"
-            SLACK_MESSAGE="Merge conflict detected in the Update Master workflow!"
             curl -X POST --data-urlencode "payload={\"channel\": \"#unite-mobile-pjproject\", \"username\": \"ci-bot\", \"text\": \":azure-x-mark: *Upstream/master to master merge* conflict detected! <https://github.com/intermedia-net/pjproject/actions/workflows/update-master.yml|Click here> for details! \", \"icon_emoji\": \":unite:\"}" ${{ secrets.SLACK_WEBHOOK_URL }}
             exit 1
           fi
 
+      - name: Push changes
+        run: git push origin master
