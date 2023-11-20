@@ -9,6 +9,9 @@ jobs:
   master_to_im_master_pr:
     runs-on: ubuntu-latest
     
+    permissions:
+      pull-requests: write
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
