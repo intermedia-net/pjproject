@@ -18,7 +18,7 @@ jobs:
 
     - name: Create Pull Request
       run: |
-        TOKEN=Bearer ${{ github.token }}
+        TOKEN=${{ github.token }}
         REPO_OWNER=${{ github.repository_owner }}
         REPO_NAME=${{ github.repository }}
 
@@ -36,8 +36,8 @@ jobs:
         echo "TARGET_BRANCH: $TARGET_BRANCH"
         echo "PR_TITLE: $PR_TITLE"
         echo "PR_BODY: $PR_BODY"
-        curl -X POST \
-          -H "Authorization: $TOKEN" \
+        curl -v -X POST \
+          -H "Authorization: Bearer $TOKEN" \
           -H "Accept: application/vnd.github+json" \
           https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/pulls \
           -d "{\"title\":\"$PR_TITLE\",\"body\":\"$PR_BODY\",\"head\":\"$SOURCE_BRANCH\",\"base\":\"$TARGET_BRANCH\"}"
