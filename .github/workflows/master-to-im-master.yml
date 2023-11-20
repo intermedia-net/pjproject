@@ -17,11 +17,20 @@ jobs:
         fetch-depth: 0
 
     - name: Create Pull Request
-      uses: peter-evans/create-pull-request@v5
-      with:
-        commit-message: Merge master to im-master
-        title: Automated Pull Request
-        body: This pull request was automatically created by a GitHub Actions workflow.
-        branch: im-master
-        base: master
-        reviewers: anikitin-intermedia, dshamaev-intermedia
+      run: |
+        TOKEN=${{ secrets.GITHUB_TOKEN }}
+        REPO_OWNER=${{ github.repository_owner }}
+        REPO_NAME=${{ github.repository }}
+
+        SOURCE_BRANCH=master
+        
+        TARGET_BRANCH=im-master
+
+        PR_TITLE="Automated Pull Request"
+        PR_BODY="This pull request was automatically created by a GitHub Actions workflow."
+
+        curl -X POST \
+          -H "Authorization: token $TOKEN" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/pulls \
+          -d "{\"title\":\"$PR_TITLE\",\"body\":\"$PR_BODY\",\"head\":\"$SOURCE_BRANCH\",\"base\":\"$TARGET_BRANCH\"}"
