@@ -22,9 +22,9 @@ jobs:
         REPO_OWNER=${{ github.repository_owner }}
         REPO_NAME=${{ github.repository }}
 
-        SOURCE_BRANCH=master
+        SOURCE_BRANCH=feature/APPS-13617
         
-        TARGET_BRANCH=im-master
+        TARGET_BRANCH=my-im-master
 
         PR_TITLE="Automated Pull Request"
         PR_BODY="This pull request was automatically created by a GitHub Actions workflow."
