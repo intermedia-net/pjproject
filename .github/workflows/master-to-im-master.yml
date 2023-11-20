@@ -1,0 +1,27 @@
+name: Merge master to im-master PR
+
+on:
+  push:
+    branches:
+      feature/APPS-13617
+
+jobs:
+  master_to_im_master_pr:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        ref: master
+        fetch-depth: 0
+
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@v5
+      with:
+        commit-message: Merge master to im-master
+        title: Automated Pull Request
+        body: This pull request was automatically created by a GitHub Actions workflow.
+        branch: im-master
+        base: master
+        reviewers: anikitin-intermedia, dshamaev-intermedia
