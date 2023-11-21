@@ -5,6 +5,15 @@ on:
     branches:
       feature/APPS-13617
 
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  REPO_NAME: ${{ github.repository }}
+  SOURCE_BRANCH: "feature/APPS-13617"
+  TARGET_BRANCH: "master"
+  PR_TITLE: "Automated Pull Request"
+  PR_BODY: "Merge $SOURCE_BRANCH to $TARGET_BRANCH"
+  REVIEWERS: "dshamaev-intermedia"
+
 jobs:
   master_to_im_master_pr:
     runs-on: ubuntu-latest
@@ -17,24 +26,30 @@ jobs:
         fetch-depth: 0
 
     - name: Create Pull Request
+      id: create_pr
       run: |
-        TOKEN=${{ github.token }}
-        REPO_NAME=${{ github.repository }}
-        SOURCE_BRANCH="feature/APPS-13617"
-        TARGET_BRANCH="master"
-        PR_TITLE="Automated Pull Request"
-        PR_BODY="This pull request was automatically created by a GitHub Actions workflow."
-
-        echo "$SOURCE_BRANCH"
-        echo "$TARGET_BRANCH"
-
         response=$(curl -v -L \
           -X POST \
           -H "Accept: application/vnd.github+json" \
           -H "Authorization: Bearer $TOKEN" \
           https://api.github.com/repos/$REPO_NAME/pulls \
-          -d "{\"title\":\"$PR_TITLE\",\"body\":\"$PR_BODY\",\"head\":\"feature/APPS-13617\",\"base\":\"master\"}")
+          -d "{\"title\":\"$PR_TITLE\",\"body\":\"$PR_BODY\",\"head\":\"$SOURCE_BRANCH\",\"base\":\"$TARGET_BRANCH\"}")
 
         pr_number=$(echo "$response" | jq -r '.number')
+        if [ "$pr_number" ]; then
+          echo "Pull request created successfully. PR NUMBER: $pr_number"
+        else
+          echo "Failed to create pull request. HTTP status: $response"
+          exit 1
+        fi
 
-        echo "PR NUMBER: $pr_number"
+    - name: Add Reviewers
+      if: success()
+      run: |
+        PR_NUMBER=$(echo ${{ steps.create_pr.outputs.pr_number }})
+
+        curl -X POST \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/requested_reviewers \
+          -d "{\"reviewers\":[\"$REVIEWERS\"]}"
