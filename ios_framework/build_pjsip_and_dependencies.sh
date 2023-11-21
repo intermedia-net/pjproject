@@ -135,7 +135,7 @@ function _build () {
 
 function _collect () {
     echo "COLLECT for arch: $arch sdk: $sdk"
-    destination_dir="$output_dir"  
+    destination_dir="$output_dir/pjlib"  
 
     mkdir -p $destination_dir
 
@@ -160,42 +160,25 @@ function clean_pjsip_libs () {
     done
 }
 
+function assemble_final_libs () {
+    echo "Assemble pjsip lib ..."
+
+    pj_filename="$output_dir/libpjsip-apple-darwin-ios.a"
+    pj_lib=$output_dir/pjlib
+
+    # remove pjsua2
+    a_excluded_files=`find $pj_lib -name libpjsua2*.a -exec printf '%s ' {} +`
+    echo Remove exluded files $a_excluded_files
+    rm -rf $a_excluded_files
+
+    a_files=`find $pj_lib -name *darwin_ios.a -exec printf '%s ' {} +`
+    libtool -o $pj_filename $a_files
+
+    rm -rf $pj_lib
+}
+
 build_dependency "bcg729" $arch $sdk $bcg729_dir
 build_dependency "openssl" $arch $sdk $openssl_dir
 build_dependency "opus" $arch $sdk $opus_dir
 build_arch
-
-
-# function assemble_final_libs () {
-#     echo "Assemble pjsip libs ..."
-
-#     mkdir -p $output_dir
-#     pj_filename="$output_dir/libpjsip-apple-darwin-ios.a"
-
-#     # remove pjsua2
-#     a_excluded_files=`find $BUILD_DIR/$1 -name libpjsua2*.a -exec printf '%s ' {} +`
-#     rm -rf $a_excluded_files
-
-#     a_files=`find $BUILD_DIR/archs -name *darwin_ios.a -exec printf '%s ' {} +`
-
-#     libtool -o $pj_filename $a_files
-
-#     lipo -info $pj_filename
-
-#     echo "Copy openssl ..."
-#     cp -r $openssl_dir/build/lib/* $output_dir
-
-#     echo "Copy opus ..."
-#     cp -r $opus_dir/build/lib/* $output_dir
-
-#     echo "Copy G729 ..."
-#     cp -r $bcg729_dir/build/lib/*.a $output_dir
-# }
-
-# function cleanup() {
-#     rm -rf $BUILD_DIR
-# }
-
-# assemble_final_libs
-# cleanup
-
+assemble_final_libs

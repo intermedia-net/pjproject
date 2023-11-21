@@ -36,6 +36,8 @@ check_or_exit "framework name using --name" $framework_name
 library_dir=$BASE_DIR/Sources/lib
 framework_dir="$BASE_DIR/Sources"
 build_dir="$PWD/tmp"
+xcframework_name="PJSipIOS.xcframework"
+xcframework_path="$BASE_DIR/$xcframework_name"
 
 # prerequisites
 function checker() {
@@ -91,24 +93,20 @@ function build_pjsip() {
     sh ./build_pjsip_and_dependencies.sh $arguments
 }
 
-function assemble_pjsip() {
+function archive_xcframework() {
     echo "Starting final assembly..."
-
-    copy_headers
     
-    pushd $framework_dir
     artefact_file_name="$framework_name.zip"
-    zip -r "$artefact_file_name" .
+    zip -r "$artefact_file_name" ./$xcframework_name
     mkdir -p $output_dir
     mv $artefact_file_name $output_dir
-    popd
 
     echo "Final assembly has finished and moved to $output_dir"
 }
 
 function copy_headers() {
     #copy headers
-    local headers_dir=$library_dir/include
+    local headers_dir=$1
 
     mkdir -p $headers_dir
 
@@ -133,22 +131,23 @@ function copy_headers() {
     cd $prev_dir
 }
 
-function cleanup() {
-    rm -rf $library_dir
-}
-
 check_prerequisites
 
-# rm -rf $library_dir
-# mkdir -p $library_dir
-# rm -rf $BUILD_DIR
-# mkdir -p $BUILD_DIR
-# rm -rf $build_dir
+rm -rf $library_dir
+mkdir -p $library_dir
+rm -rf $BUILD_DIR
+mkdir -p $BUILD_DIR
+rm -rf $build_dir
 
-# cp $BASE_DIR/config_site.h "$source_dir/pjlib/include/pj"
+cp $BASE_DIR/config_site.h "$source_dir/pjlib/include/pj"
 
-# build_pjsip arm64 iphoneos
-# build_pjsip arm64 iphonesimulator
-# build_pjsip x86_64 iphonesimulator
-# assemble_pjsip
-# cleanup
+build_pjsip arm64 iphoneos
+build_pjsip arm64 iphonesimulator
+build_pjsip x86_64 iphonesimulator
+
+sh ./create_xcframework.sh $BASE_DIR $build_dir $xcframework_path
+copy_headers $xcframework_path/ios-arm64/PJSipIOS.framework/Headers 
+copy_headers $xcframework_path/ios-arm64_x86_64-simulator/PJSipIOS.framework/Headers
+
+archive_xcframework
+rm -rf $library_dir

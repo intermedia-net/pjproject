@@ -1,0 +1,5 @@
+framework module PJSipIOS {
+    umbrella header "PJSip-umbrella.h"
+
+    export *
+}
