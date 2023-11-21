@@ -47,10 +47,12 @@ jobs:
           exit 1
         fi
 
+
   add_reviewers:
     needs: master_to_im_master_pr
     runs-on: ubuntu-latest
 
+    steps:
     - name: Add Reviewers
       if: success()
       run: |
