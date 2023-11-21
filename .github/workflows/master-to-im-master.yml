@@ -33,4 +33,4 @@ jobs:
           -H "Accept: application/vnd.github+json" \
           -H "Authorization: Bearer $TOKEN" \
           https://api.github.com/repos/$REPO_NAME/pulls \
-          -d '{"title":"$PR_TITLE","body":"$PR_BODY","head":"$SOURCE_BRANCH","base":"$TARGET_BRANCH"}'
+          -d '{"title":"$PR_TITLE","body":"$PR_BODY","head":"feature/APPS-13617","base":"master"}'
