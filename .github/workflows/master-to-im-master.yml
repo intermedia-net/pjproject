@@ -33,4 +33,8 @@ jobs:
           -H "Accept: application/vnd.github+json" \
           -H "Authorization: Bearer $TOKEN" \
           https://api.github.com/repos/$REPO_NAME/pulls \
-          -d '{"title":"$PR_TITLE","body":"$PR_BODY","head":"feature/APPS-13617","base":"master"}'
+          -d "{\"title\":\"$PR_TITLE\",\"body\":\"$PR_BODY\",\"head\":\"feature/APPS-13617\",\"base\":\"master\"}"
+
+        pr_number=$(echo "$response" | jq -r '.number')
+
+        echo "PR NUMBER: $pr_number"
