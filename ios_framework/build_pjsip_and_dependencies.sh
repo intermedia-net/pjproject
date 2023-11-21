@@ -110,14 +110,13 @@ function _build () {
 
     if [ "$sdk" == "iphonesimulator" ]; then
         echo dev path $DEVPATH
-        export CFLAGS="${CFLAGS} -O2 -m32 -mios-simulator-version-min=$min_ios_version"
-        export LDFLAGS="${LDFLAGS} -O2 -m32 -mios-simulator-version-min=$min_ios_version"
+        export CFLAGS="${CFLAGS} -O2 -m64 -mios-simulator-version-min=$min_ios_version"
+        export LDFLAGS="${LDFLAGS} -O2 -m64 -mios-simulator-version-min=$min_ios_version"
         export MIN_IOS="-mios-simulator-version-min=$min_ios_version"
     else
-        export CFLAGS="${CFLAGS} -miphoneos-version-min=$min_ios_version"
+        export CFLAGS="${CFLAGS} -mios-version-min=$min_ios_version"
         export MIN_IOS="-mios-version-min=$min_ios_version"
     fi
-
 
     echo "Building for $arch"
     echo Run configure command: $configure
