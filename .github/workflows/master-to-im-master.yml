@@ -18,10 +18,6 @@ jobs:
   master_to_im_master_pr:
     runs-on: ubuntu-latest
     
-    outputs:
-      id: pr
-      value: ${{ steps.create_pr.outputs.pr_number }}
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -41,25 +37,23 @@ jobs:
 
         pr_number=$(echo "$response" | jq -r '.number')
         if [ "$pr_number" ]; then
+          echo "PR_NUMBER=$pr_number" >> "$GITHUB_ENV"
           echo "Pull request created successfully. PR NUMBER: $pr_number"
         else
           echo "Failed to create pull request. HTTP status: $response"
           exit 1
         fi
 
-
-  add_reviewers:
-    needs: master_to_im_master_pr
-    runs-on: ubuntu-latest
-
-    steps:
     - name: Add Reviewers
+      env:
+          PR_NUMBER: ${{ steps.create_pr.outputs.PR_NUMBER }}      
+
       if: success()
       run: |
-        PR_NUMBER=$(echo ${{ needs.master_to_im_master_pr.outputs.pr }})
 
-        curl -v \
-          -X POST \
+        PR_NUMBER=$(echo ${{ steps.create_pr.outputs.pr_number }})
+
+        curl -X POST \
           -H "Authorization: Bearer $GITHUB_TOKEN" \
           -H "Accept: application/vnd.github.v3+json" \
           https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/requested_reviewers \
