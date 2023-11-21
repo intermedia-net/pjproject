@@ -11,7 +11,7 @@ env:
   SOURCE_BRANCH: feature/APPS-13617
   TARGET_BRANCH: master
   PR_TITLE: "Automated Pull Request"
-  PR_BODY: "Merge ${{ env.SOURCE_BRANCH }} to ${{ env.TARGET_BRANCH }}"
+  PR_BODY: "Merge feature/APPS-13617 to master"
   REVIEWERS: "dshamaev-intermedia, anikitin-intermedia"
 
 jobs:
