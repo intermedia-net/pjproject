@@ -35,6 +35,7 @@ check_or_exit "framework name using --name" $framework_name
 
 library_dir=$BASE_DIR/Sources/lib
 framework_dir="$BASE_DIR/Sources"
+build_dir="$PWD/tmp"
 
 # prerequisites
 function checker() {
@@ -67,16 +68,25 @@ function check_prerequisites () {
 function build_pjsip() {
     set -e
 
-    rm -rf $library_dir
-    mkdir -p $library_dir
+    arch=$1
+    sdk=$2
+
+    output_dir="$build_dir/$arch"
+    if [ "$sdk" == "iphonesimulator" ]; then
+        output_dir="${output_dir}-simulator"
+    fi
+    mkdir -p $output_dir
+
+    echo output dir $output_dir
 
     arguments="--min-ios-version=$MIN_IOS_VERSION"
-    arguments="$arguments --output-dir=$library_dir"
+    arguments="$arguments --output-dir=$output_dir"
     arguments="$arguments --source-dir=$source_dir"
+    arguments="$arguments --arch=$arch"
+    arguments="$arguments --sdk=$sdk"
     arguments="$arguments --opus=$BASE_DIR/opus"
     arguments="$arguments --openssl=$BASE_DIR/openssl"
     arguments="$arguments --bcg729=$BASE_DIR/bcg729"
-    arguments="$arguments --config-site=$BASE_DIR/config_site.h"
 
     sh ./build_pjsip_and_dependencies.sh $arguments
 }
@@ -128,6 +138,17 @@ function cleanup() {
 }
 
 check_prerequisites
-build_pjsip
-assemble_pjsip
-cleanup
+
+# rm -rf $library_dir
+# mkdir -p $library_dir
+# rm -rf $BUILD_DIR
+# mkdir -p $BUILD_DIR
+# rm -rf $build_dir
+
+# cp $BASE_DIR/config_site.h "$source_dir/pjlib/include/pj"
+
+# build_pjsip arm64 iphoneos
+# build_pjsip arm64 iphonesimulator
+# build_pjsip x86_64 iphonesimulator
+# assemble_pjsip
+# cleanup

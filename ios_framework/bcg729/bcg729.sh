@@ -42,6 +42,10 @@ case $CURRENTPATH in
     ;;
 esac
 
+
+rm -rf ${CURRENTPATH}/src/bcg729-${VERSION}
+rm -rf $CURRENTPATH/build
+
 set -e
 if [ ! -e bcg729-${VERSION}.tar.gz ]; then
     echo "Downloading bcg729-${VERSION}.tar.gz"
@@ -57,13 +61,27 @@ mkdir -p "${CURRENTPATH}/build"
 tar zxf bcg729-${VERSION}.tar.gz -C "${CURRENTPATH}/src"
 cd "${CURRENTPATH}/src/bcg729-${VERSION}"
 
+ARCH=$1
+SDK=$2
+
+if [[ "${SDK}" == "iphonesimulator" ]]; then
+    if [[ "${ARCH}" == "arm64" ]]; then
+        PLATFORM="SIMULATORARM64"
+    else
+        PLATFORM="SIMULATOR64"
+    fi
+else
+    PLATFORM="OS64"
+fi
+
 CONF_LOG="${CURRENTPATH}/src/logs/conf-BCG729-${VERSION}.log"
 BUILD_LOG="${CURRENTPATH}/src/logs/build-BCG729-${VERSION}.log"
 INSTALL_LOG="${CURRENTPATH}/src/logs/install-BCG729-${VERSION}.log"
 
-echo "Configurating bcg729-${VERSION} ..."
+echo "Configurating bcg729-${VERSION} for sdk: $SDK arch: $ARCH platform: $PLATFORM ..."
+# List of all available platforms: https://github.com/leetal/ios-cmake/blob/master/README.md
 cmake . -G Xcode \
-    -DPLATFORM=OS64COMBINED \
+    -DPLATFORM=$PLATFORM \
     -DDEPLOYMENT_TARGET=${MIN_IOS_VERSION} \
     -DCMAKE_TOOLCHAIN_FILE="${CURRENTPATH}/ios.toolchain.cmake" \
     -DCMAKE_INSTALL_PREFIX="${CURRENTPATH}/build" \
@@ -79,9 +97,5 @@ cmake --build . --config Release > "${BUILD_LOG}" 2>&1
 echo "Installing bcg729-${VERSION} ..."
 cmake --install . --config Release > "${INSTALL_LOG}" 2>&1
 
-lipo -info ${CURRENTPATH}/build/lib/libbcg729.a
-
 rm ${CURRENTPATH}/build/lib/*.dylib
 rm -rf ${CURRENTPATH}/build/lib/pkgconfig
-rm -rf ${CURRENTPATH}/src/bcg729-${VERSION}
-

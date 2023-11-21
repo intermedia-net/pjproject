@@ -53,18 +53,21 @@ esac
 build()
 {
     ARCH=$1
+    SDK=$2
 
     pushd . > /dev/null
     cd "${OPENSSL_VERSION}"
 
-    if [[ "${ARCH}" == "i386" || "${ARCH}" == "x86_64" ]]; then
+    if [[ "${SDK}" == "iphonesimulator" ]]; then
         PLATFORM="iPhoneSimulator"
+        ios_version_flag="-mios-simulator-version-min=$MIN_IOS_VERSION"
     else
         PLATFORM="iPhoneOS"
+        ios_version_flag="-miphoneos-version-min=$MIN_IOS_VERSION"
     fi
 
     export $PLATFORM
-    export CROSS_TOP="${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer"
+    export CROSS_TOP=`xcrun -sdk $SDK --show-sdk-platform-path`/Developer
     export CROSS_SDK="${PLATFORM}.sdk"
     export BUILD_TOOLS="${DEVELOPER}"
     export CC="${BUILD_TOOLS}/usr/bin/gcc -fembed-bitcode -arch ${ARCH}"
@@ -77,15 +80,11 @@ build()
 
     echo "Building ${OPENSSL_VERSION} || ${PLATFORM} ${ARCH}"
 
-    if [[ "${ARCH}" == "i386" || "${ARCH}" == "x86_64" ]]; then
-        TARGET="darwin-i386-cc"
-        if [[ $ARCH == "x86_64" ]]; then
-            TARGET="darwin64-x86_64-cc"
-        fi
-
-        ./Configure no-asm ${TARGET} ${OPENSSL_CONFIGURE_OPTIONS} --prefix="${INSTALL_DIR}" --openssldir="${INSTALL_DIR}" &> "${CONFIG_LOG}"
+    if [ "$SDK" == "iphonesimulator" ];
+    then
+        ./Configure iossimulator-xcrun "-arch $ARCH -fembed-bitcode" ${OPENSSL_CONFIGURE_OPTIONS} --prefix="${INSTALL_DIR}" --openssldir="${INSTALL_DIR}" &> "${CONFIG_LOG}"
     else
-        ./Configure iphoneos-cross DSO_LDFLAGS=-fembed-bitcode --prefix="${INSTALL_DIR}" ${OPENSSL_CONFIGURE_OPTIONS} --openssldir="${INSTALL_DIR}" &> "${CONFIG_LOG}"
+        ./Configure iphoneos-cross DSO_LDFLAGS=-fembed-bitcode --prefix="${INSTALL_DIR}" $ios_version_flag ${OPENSSL_CONFIGURE_OPTIONS} --openssldir="${INSTALL_DIR}" &> "${CONFIG_LOG}"
     fi
 
     if [ $? != 0 ];
@@ -95,7 +94,7 @@ build()
     fi
 
     # add -isysroot to CC=
-    sed -ie "s!^CFLAGS=!CFLAGS=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${MIN_IOS_VERSION} !" "Makefile"
+    sed -ie "s!^CFLAGS=!CFLAGS=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} $ios_version_flag !" "Makefile"
 
     perl configdata.pm --dump >> "${CONFIG_LOG}" 2>&1
 
@@ -109,17 +108,16 @@ build()
 
     make install_sw >> "${BUILD_LOG}" 2>&1
     make clean >> "${BUILD_LOG}" 2>&1
+
+    cp $INSTALL_DIR/lib/*.a $CURRENTPATH/build/lib
+    cp $INSTALL_DIR/include/openssl/*.h $CURRENTPATH/build/include/openssl
+
     popd > /dev/null
 }
 
 packLibrary()
 {
     LIBRARY=$1
-
-        # for iOS <= 10
-        #"${CURRENTPATH}/bin/iPhoneSimulator-i386.sdk/lib/lib${LIBRARY}.a" \
-        #"${CURRENTPATH}/bin/iPhoneOS-armv7.sdk/lib/lib${LIBRARY}.a" \
-        #"${CURRENTPATH}/bin/iPhoneOS-armv7s.sdk/lib/lib${LIBRARY}.a" \
 
     lipo \
         "${CURRENTPATH}/bin/iPhoneSimulator-x86_64.sdk/lib/lib${LIBRARY}.a" \
@@ -134,11 +132,11 @@ echo "Cleaning up"
 
 rm -rf "${CURRENTPATH}/bin"
 rm -rf "${CURRENTPATH}/build"
-
-rm -rf "${OPENSSL_VERSION}"
+rm -rf $OPENSSL_VERSION
 
 mkdir -p "${CURRENTPATH}/bin"
 mkdir -p "${CURRENTPATH}/build/lib"
+mkdir -p "${CURRENTPATH}/build/include/openssl"
 
 if [ ! -e ${OPENSSL_VERSION}.tar.gz ]; then
     echo "Downloading ${OPENSSL_VERSION}.tar.gz"
@@ -151,18 +149,11 @@ echo "Unpacking OpenSSL"
 tar xfz "${OPENSSL_VERSION}.tar.gz"
 
 echo "Building OpenSSL ${VERSION} for iOS"
-#build "i386"
-#build "armv7"
-#build "armv7s"
-build "x86_64"
-build "arm64"
-build "arm64e"
 
-echo "  Copying headers and libraries"
-cp -R ${CURRENTPATH}/bin/iPhoneSimulator-x86_64.sdk/include ${CURRENTPATH}/build/include
+build $1 $2
 
-packLibrary "crypto"
-packLibrary "ssl"
+# packLibrary "crypto"
+# packLibrary "ssl"
 
 cd ${CURRENTPATH}
 

@@ -27,7 +27,6 @@ OPUS_CONFIGURE_OPTIONS="--enable-float-approx \
                         --disable-doc"
 
 CURRENTPATH=`pwd`
-ARCHS="x86_64 arm64 arm64e" # when min vers is iOS10 -> i386 armv7 armv7s
 DEVELOPER=`xcode-select -print-path`
 
 if [ ! -d "$DEVELOPER" ]; then
@@ -53,25 +52,20 @@ case $CURRENTPATH in
     ;;
 esac
 
-packLibrary()
-{
-    LIBRARY=$1
+# packLibrary()
+# {
+#     LIBRARY=$1
+#     lipo \
+#         "${CURRENTPATH}/bin/iPhoneSimulator-x86_64.sdk/lib/lib${LIBRARY}.a" \
+#         "${CURRENTPATH}/bin/iPhoneOS-arm64.sdk/lib/lib${LIBRARY}.a" \
+#         "${CURRENTPATH}/bin/iPhoneOS-arm64e.sdk/lib/lib${LIBRARY}.a" \
+#         -create -output ${CURRENTPATH}/build/lib/lib${LIBRARY}.a
 
-        # for iOS <= 10
-        #"${CURRENTPATH}/bin/iPhoneSimulator-i386.sdk/lib/lib${LIBRARY}.a" \
-        #"${CURRENTPATH}/bin/iPhoneOS-armv7.sdk/lib/lib${LIBRARY}.a" \
-        #"${CURRENTPATH}/bin/iPhoneOS-armv7s.sdk/lib/lib${LIBRARY}.a" \
-
-    lipo \
-        "${CURRENTPATH}/bin/iPhoneSimulator-x86_64.sdk/lib/lib${LIBRARY}.a" \
-        "${CURRENTPATH}/bin/iPhoneOS-arm64.sdk/lib/lib${LIBRARY}.a" \
-        "${CURRENTPATH}/bin/iPhoneOS-arm64e.sdk/lib/lib${LIBRARY}.a" \
-        -create -output ${CURRENTPATH}/build/lib/lib${LIBRARY}.a
-
-    lipo -info ${CURRENTPATH}/build/lib/lib${LIBRARY}.a
-}
+#     lipo -info ${CURRENTPATH}/build/lib/lib${LIBRARY}.a
+# }
 
 set -e
+
 if [ ! -e opus-${VERSION}.tar.gz ]; then
     echo "Downloading opus-${VERSION}.tar.gz"
     curl -O -L -s https://archive.mozilla.org/pub/opus/opus-${VERSION}.tar.gz
@@ -79,85 +73,85 @@ else
     echo "Using opus-${VERSION}.tar.gz"
 fi
 
-mkdir -p "${CURRENTPATH}/src"
+rm -rf "${CURRENTPATH}/bin"
+rm -rf "${CURRENTPATH}/build"
+rm -rf "${CURRENTPATH}/src"
+
 mkdir -p "${CURRENTPATH}/bin"
 mkdir -p "${CURRENTPATH}/build/lib"
+mkdir -p "${CURRENTPATH}/build/include/opus"
+mkdir -p "${CURRENTPATH}/src"
 
 tar zxf opus-${VERSION}.tar.gz -C "${CURRENTPATH}/src"
 cd "${CURRENTPATH}/src/opus-${VERSION}"
 
+ARCH=$1
+SDK=$2
 
-for ARCH in ${ARCHS}
-do
-    if [[ "${ARCH}" == "i386" || "${ARCH}" == "x86_64" ]];
-    then
-        PLATFORM="iPhoneSimulator"
-        if [ "${ARCH}" == "x86_64" ]
-        then
-            HOST=x86_64-apple-darwin
-        else
-            HOST=i386-apple-darwin
-        fi
-    else
-        PLATFORM="iPhoneOS"
-        HOST=arm-apple-darwin
-    fi
+if [[ "${ARCH}" == "x86_64" ]];
+then
+    HOST=x86_64-apple-darwin
+else 
+    HOST=arm-apple-darwin 
+fi
 
-    export CROSS_TOP="${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer"
-    export CROSS_SDK="${PLATFORM}.sdk"
-    export BUILD_TOOLS="${DEVELOPER}"
+if [[ "${SDK}" == "iphonesimulator" ]];
+then
+    PLATFORM="iPhoneSimulator"
+    ios_version_flag="-mios-simulator-version-min=$MIN_IOS_VERSION"
+else 
+    PLATFORM="iPhoneOS"
+    ios_version_flag="-miphoneos-version-min=$MIN_IOS_VERSION"
+fi
 
-    echo "Building opus-${VERSION} for ${PLATFORM}  ${ARCH}"
-    echo "Please stand by..."
 
-    mkdir -p "${CURRENTPATH}/bin/${PLATFORM}-${ARCH}.sdk"
-    LOG="${CURRENTPATH}/bin/${PLATFORM}-${ARCH}.sdk/build-opus-${VERSION}.log"
+export CROSS_TOP=`xcrun -sdk $SDK --show-sdk-platform-path`/Developer
+export CROSS_SDK="${PLATFORM}.sdk"
+export BUILD_TOOLS="${DEVELOPER}"
 
-    XCRUN_SDK=`echo $PLATFORM | tr '[:upper:]' '[:lower:]'`
-    export CC="xcrun -sdk ${XCRUN_SDK} clang -mios-version-min=${MIN_IOS_VERSION} -arch ${ARCH}"
-    CFLAGS="-arch ${ARCH} -D__OPTIMIZE__ -fembed-bitcode"
+echo "Building opus-${VERSION} for ${PLATFORM} ${ARCH}"
+echo "Please stand by..."
 
-    set +e
-    INSTALL_DIR="${CURRENTPATH}/bin/${PLATFORM}-${ARCH}.sdk"
-    if [[ "$VERSION" =~ 1.0.0. ]]; then
-        ./configure BSD-generic32 ${OPUS_CONFIGURE_OPTIONS} --prefix="${INSTALL_DIR}" > "${LOG}" 2>&1
-    else
-        ./configure --host=${HOST} ${OPUS_CONFIGURE_OPTIONS} --prefix="${INSTALL_DIR}" CFLAGS="${CFLAGS}" > "${LOG}" 2>&1
-    fi
+mkdir -p "${CURRENTPATH}/bin/${PLATFORM}-${ARCH}.sdk"
+LOG="${CURRENTPATH}/bin/${PLATFORM}-${ARCH}.sdk/build-opus-${VERSION}.log"
 
-    if [ $? != 0 ];
-    then
-        echo "Problem while configure - Please check ${LOG}"
-        exit 1
-    fi
+export CC="xcrun -sdk ${SDK} clang $ios_version_flag -arch ${ARCH}"
+CFLAGS="-arch ${ARCH} -D__OPTIMIZE__ -fembed-bitcode"
 
-    # add -isysroot to CC=
-    sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${MIN_IOS_VERSION} !" "Makefile"
+set +e
+INSTALL_DIR="${CURRENTPATH}/bin/${PLATFORM}-${ARCH}.sdk"
 
-    if [ "$1" == "verbose" ];
-    then
-        make -j$(sysctl -n hw.ncpu)
-    else
-        make -j$(sysctl -n hw.ncpu) >> "${LOG}" 2>&1
-    fi
+./configure --host=${HOST} ${OPUS_CONFIGURE_OPTIONS} --prefix="${INSTALL_DIR}" CFLAGS="${CFLAGS}" > "${LOG}" 2>&1
 
-    if [ $? != 0 ];
-    then
-        echo "Problem while make - Please check ${LOG}"
-        exit 1
-    fi
+if [ $? != 0 ];
+then
+    echo "Problem while configure - Please check ${LOG}"
+    exit 1
+fi
 
-    set -e
-    make install >> "${LOG}" 2>&1
-    make clean >> "${LOG}" 2>&1
-done
+# add -isysroot to CC=
+sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} $ios_version_flag !" "Makefile"
 
-echo "  Copying headers and libraries"
-mkdir -p ${CURRENTPATH}/build/include
-cp -R ${CURRENTPATH}/bin/iPhoneSimulator-x86_64.sdk/include/opus ${CURRENTPATH}/build/include/
+if [ "$1" == "verbose" ];
+then
+    make -j$(sysctl -n hw.ncpu)
+else
+    make -j$(sysctl -n hw.ncpu) >> "${LOG}" 2>&1
+fi
 
-packLibrary "opus"
+if [ $? != 0 ];
+then
+    echo "Problem while make - Please check ${LOG}"
+    exit 1
+fi
+
+set -e
+make install >> "${LOG}" 2>&1
+make clean >> "${LOG}" 2>&1
+cp $INSTALL_DIR/lib/*.a $CURRENTPATH/build/lib
+cp $INSTALL_DIR/include/opus/*.h $CURRENTPATH/build/include/opus 
+
+# packLibrary "opus"
 
 cd ${CURRENTPATH}
-
 echo "Building done."
