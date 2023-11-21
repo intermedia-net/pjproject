@@ -8,11 +8,11 @@ on:
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   REPO_NAME: ${{ github.repository }}
-  SOURCE_BRANCH: "feature/APPS-13617"
-  TARGET_BRANCH: "master"
+  SOURCE_BRANCH: feature/APPS-13617
+  TARGET_BRANCH: master
   PR_TITLE: "Automated Pull Request"
   PR_BODY: "Merge $SOURCE_BRANCH to $TARGET_BRANCH"
-  REVIEWERS: "dshamaev-intermedia"
+  REVIEWERS: "dshamaev-intermedia, anikitin-intermedia"
 
 jobs:
   master_to_im_master_pr:
@@ -38,6 +38,7 @@ jobs:
         pr_number=$(echo "$response" | jq -r '.number')
         if [ "$pr_number" ]; then
           echo "Pull request created successfully. PR NUMBER: $pr_number"
+          echo "PR_NUMBER=$pr_number" >> "$GITHUB_OUTPUT"
         else
           echo "Failed to create pull request. HTTP status: $response"
           exit 1
