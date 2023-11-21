@@ -38,7 +38,6 @@ jobs:
         pr_number=$(echo "$response" | jq -r '.number')
         if [ "$pr_number" ]; then
           echo "Pull request created successfully. PR NUMBER: $pr_number"
-          echo "PR_NUMBER=$pr_number" >> "$GITHUB_OUTPUT"
         else
           echo "Failed to create pull request. HTTP status: $response"
           exit 1
