@@ -50,7 +50,7 @@ jobs:
 
       if: success()
       run: |
-        curl -v
+        curl -v \
           -X POST \
           -H "Authorization: Bearer $GITHUB_TOKEN" \
           -H "Accept: application/vnd.github.v3+json" \
