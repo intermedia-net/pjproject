@@ -13,15 +13,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
       with:
-        ref: my-im-master
+        ref: master
         fetch-depth: 0
 
     - name: Create Pull Request
       run: |
         TOKEN=${{ github.token }}
         REPO_NAME=${{ github.repository }}
-        SOURCE_BRANCH="master"
-        TARGET_BRANCH="my-im-master"
+        SOURCE_BRANCH=feature/APPS-13617
+        TARGET_BRANCH=master
         PR_TITLE="Automated Pull Request"
         PR_BODY="This pull request was automatically created by a GitHub Actions workflow."
 
@@ -32,7 +32,3 @@ jobs:
           -H "X-GitHub-Api-Version: 2022-11-28" \
           https://api.github.com/repos/$REPO_NAME/pulls \
           -d '{"title":"$PR_TITLE","body":"$PR_BODY","head":"$SOURCE_BRANCH","base":"$TARGET_BRANCH"}'
-
-        pr_number=$(echo "$response" | jq -r '.number')
-
-        echo "PULL REQUEST NUMBER: $pr_number"
