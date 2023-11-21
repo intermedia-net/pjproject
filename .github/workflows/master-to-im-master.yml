@@ -18,6 +18,10 @@ jobs:
   master_to_im_master_pr:
     runs-on: ubuntu-latest
     
+    outputs:
+      id: pr
+      value: ${{ steps.create_pr.outputs.pr_number }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -43,12 +47,17 @@ jobs:
           exit 1
         fi
 
+  add_reviewers:
+    needs: master_to_im_master_pr
+    runs-on: ubuntu-latest
+
     - name: Add Reviewers
       if: success()
       run: |
-        PR_NUMBER=$(echo ${{ steps.create_pr.outputs.pr_number }})
+        PR_NUMBER=$(echo ${{ needs.master_to_im_master_pr.outputs.pr }})
 
-        curl -X POST \
+        curl -v \
+          -X POST \
           -H "Authorization: Bearer $GITHUB_TOKEN" \
           -H "Accept: application/vnd.github.v3+json" \
           https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/requested_reviewers \
