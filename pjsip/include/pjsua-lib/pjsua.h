@@ -594,6 +594,8 @@ typedef struct pjsua_stream_stat
     /** Jitter buffer statistic. */
     pjmedia_jb_state    jbuf;
 
+    /** Codec statistics. */
+    pjmedia_codec_stat  codec_stat;
 } pjsua_stream_stat;
 
 
@@ -2403,6 +2405,17 @@ typedef struct pjsua_config
      * Default: empty string
      */
     pj_str_t         upnp_if_name;
+
+    /**
+     * Specify whether to ignore unexpected incoming INVITE messages.
+     * Incoming INVITE is unexpected when it received when library is not 
+     * ready to handle it. We know only two cases: 
+     * 1. Receiving INVITE while doing shutdown
+     * 2. Receiving INVITE while there is no registered account
+     * 
+     * Default: PJ_FALSE
+     */
+    pj_bool_t        ignore_unexpected_invites;
 
 } pjsua_config;
 
@@ -4995,6 +5008,45 @@ PJ_DECL(pj_status_t) pjsua_acc_create_request(pjsua_acc_id acc_id,
                                               const pjsip_method *method,
                                               const pj_str_t *target,
                                               pjsip_tx_data **p_tdata);
+
+
+/**
+ * Create arbitrary out of dialog requests using the account. Application should only
+ * use this function to create auxiliary requests outside dialog and use the call
+ * or presence API to create dialog related requests.
+ *
+ * @param acc_id        The account ID.
+ * @param method_name   Method name, e.g. INFO, OPTIONS
+ * @param target        Target URI.
+ * @param msg_data      Optional headers, body, etc to be added to outgoing INFO
+ *                      request, or NULL if no custom header is desired.
+ * @param p_tdata       Pointer to receive the request.
+ *
+ * @return              PJ_SUCCESS or the error code.
+ */
+PJ_DECL(pj_status_t) pjsua_acc_create_ood_request(pjsua_acc_id acc_id,
+                                                  pj_str_t method_name,
+                                                  const pj_str_t *target,
+                                                  const pjsua_msg_data *msg_data,
+                                                  pjsip_tx_data **p_tdata);
+
+
+/**
+ * Create arbitrary out of dialog requests using the account. Application should only
+ * use this function to create auxiliary requests outside dialog and use the call
+ * or presence API to create dialog related requests.
+ *
+ * @param acc_id        The account ID.
+ * @param from_tdata    Original request without auth header
+ * @param rdata         Answer to original request with auth challenge
+ * @param p_tdata       Pointer to receive the request.
+ *
+ * @return              PJ_SUCCESS or the error code.
+ */
+PJ_DECL(pj_status_t) pjsua_acc_recreate_ood_request(pjsua_acc_id acc_id,
+                                                    pjsip_tx_data *from_tdata,
+                                                    const pjsip_rx_data *rdata,
+                                                    pjsip_tx_data **p_tdata);
 
 
 /**

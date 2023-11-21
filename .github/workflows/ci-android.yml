@@ -13,8 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: read
     container: 
-      image: rinekri/pjsip-android-builder:latest  # TODO: replace with intermedia image when it will be uploaded
+      image: ghcr.io/intermedia-net/pjproject-android-builder:master
       volumes:
         - ${{ github.workspace }}/input:/home/tools/pjproject 
         - ${{ github.workspace }}/output:/home/output/pjsip-build-output
@@ -36,11 +37,11 @@ jobs:
         run: |
           tar -czvf "$RELEASE_ARCHIVE_NAME".tar.gz -C output .
       - 
-        name: Create release
-        id: create_release
+        name: Update release
+        id: update_release
         uses: ncipollo/release-action@v1
         with:
-          name: Android release ${{ github.ref_name }}
+          tag: ${{ github.ref_name }}
           artifacts: ${{ env.RELEASE_ARCHIVE_NAME }}.tar.gz
-          draft: true
-          prerelease: false
+          allowUpdates: true
+          omitNameDuringUpdate: true

@@ -1753,6 +1753,28 @@ struct PresNotifyParam
     SipTxOption         txOption;
 };
 
+/**
+ * This structure contains parameters for Account::sendOutOfDialogRequest
+ */
+struct AccountSendOutOfDialogRequestParam
+{   
+    /**
+     * Message body and/or list of headers etc to be included in
+     * outgoing request.
+     */
+    SipTxOption txOption;
+
+    /**
+     * Request method. Allowed INFO, OPTIONS.
+     */
+    string method;
+    
+    /**
+     * Request identity token.
+     */
+    string token;
+};
+
 
 /**
  * Wrapper class for Buddy matching algo.
@@ -1984,6 +2006,14 @@ public:
      */
     Buddy findBuddy2(string uri) const PJSUA2_THROW(Error);
 
+    /**
+     * Send out of dialog request with custom payload 
+     *
+     * @param options            Additional data to be sent with the message, if any.
+     *
+     */
+    void sendOutOfDialogRequest(const AccountSendOutOfDialogRequestParam &prm) PJSUA2_THROW(Error);
+
 public:
     /*
      * Callbacks
@@ -2088,6 +2118,18 @@ public:
      */
     virtual void onMwiInfo(OnMwiInfoParam &prm)
     { PJ_UNUSED_ARG(prm); }
+
+    /**
+     * Notification about response on out of dialog request.
+     * 
+     * @param token          Request identity token
+     * @param event          Response event
+     */
+    virtual void onOutOfDialogResponse(string token, SipEvent &event)
+    {
+        PJ_UNUSED_ARG(token);
+        PJ_UNUSED_ARG(event);
+    }
 
 private:
     friend class Endpoint;

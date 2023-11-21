@@ -92,20 +92,22 @@ struct LossType
  */
 struct RtcpStreamStat
 {
-    TimeVal         update;     /**< Time of last update.                   */
-    unsigned        updateCount;/**< Number of updates (to calculate avg)   */
-    unsigned        pkt;        /**< Total number of packets                */
-    unsigned        bytes;      /**< Total number of payload/bytes          */
-    unsigned        discard;    /**< Total number of discarded packets.     */
-    unsigned        loss;       /**< Total number of packets lost           */
-    unsigned        reorder;    /**< Total number of out of order packets   */
-    unsigned        dup;        /**< Total number of duplicates packets     */
+    TimeVal         update;     /**< Time of last update.                           */
+    unsigned        updateCount;/**< Number of updates (to calculate avg)           */
+    unsigned        pkt;        /**< Total number of packets                        */
+    unsigned        bytes;      /**< Total number of payload/bytes                  */
+    unsigned        discard;    /**< Total number of discarded packets.             */
+    unsigned        loss;       /**< Total number of packets lost                   */
+    unsigned        reorder;    /**< Total number of out of order packets           */
+    unsigned        dup;        /**< Total number of duplicates packets             */
+    unsigned        nackCount;  /**< Total number of packets requested using NACK   */
+    unsigned        usefulNackCount;/**< Total number of played NACK packets        */
     
-    MathStat        lossPeriodUsec; /**< Loss period statistics             */
+    MathStat        lossPeriodUsec; /**< Loss period statistics                     */
 
-    LossType        lossType;   /**< Types of loss detected.                */
+    LossType        lossType;   /**< Types of loss detected.                        */
     
-    MathStat        jitterUsec; /**< Jitter statistics                      */
+    MathStat        jitterUsec; /**< Jitter statistics                              */
     
 public:
     /**
@@ -699,6 +701,36 @@ public:
 };
 
 /**
+ * Opus codec statistics
+ */
+struct OpusCodecStat {
+    unsigned  packetCount;              /**< Packet count                   */
+    unsigned  packetWithFecCount;       /**< Packet with FEC count          */
+    unsigned  audioCount;               /**< Audio packet count             */
+    unsigned  fecCount;                 /**< FEC count                      */
+    unsigned  recoverWithCopyCount;     /**< Recoverwith copy               */
+    unsigned  recoverWithPlcCount;      /**< Recover with PLC packet count  */
+    unsigned  recoverWithFecCount;      /**< Recover with FEC packet count  */
+};
+
+/**
+ * Codec statistics.
+ */
+struct CodecStat
+{
+    /**
+    * Opus codec statistic.
+    */ 
+    OpusCodecStat opus;
+
+public:
+    /**
+     * Convert from pjsip
+     */
+    void fromPj(const pjmedia_codec_stat &codec_stat);
+};
+
+/**
  * Media stream statistic.
  */
 struct StreamStat
@@ -712,6 +744,11 @@ struct StreamStat
      * Jitter buffer statistic.
      */
     JbufState   jbuf;
+
+    /**
+     * Codec stat
+     */
+    CodecStat codecStat;
 
 public:
     /**

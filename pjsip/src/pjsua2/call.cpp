@@ -58,6 +58,8 @@ void RtcpStreamStat::fromPj(const pjmedia_rtcp_stream_stat &prm)
     this->loss            = prm.loss;
     this->reorder         = prm.loss;
     this->dup             = prm.dup;
+    this->nackCount       = prm.nack_cnt;
+    this->usefulNackCount = prm.useful_nack_cnt;
     this->lossPeriodUsec.fromPj(prm.loss_period);
     this->lossType.burst  = prm.loss_type.burst;
     this->lossType.random = prm.loss_type.random;
@@ -381,10 +383,21 @@ void StreamInfo::fromPj(const pjsua_stream_info &info)
     }
 }
 
+void CodecStat::fromPj(const pjmedia_codec_stat &codec_stat) {
+    opus.packetCount = codec_stat.opus.pkt_cnt;
+    opus.packetWithFecCount = codec_stat.opus.pkt_with_fec_cnt;
+    opus.audioCount = codec_stat.opus.aud_cnt;
+    opus.fecCount = codec_stat.opus.fec_cnt;
+    opus.recoverWithCopyCount = codec_stat.opus.recover_with_copy_cnt;
+    opus.recoverWithPlcCount = codec_stat.opus.recover_with_plc_cnt;
+    opus.recoverWithFecCount = codec_stat.opus.recover_with_fec_cnt;
+}
+
 void StreamStat::fromPj(const pjsua_stream_stat &prm)
 {
     rtcp.fromPj(prm.rtcp);
     jbuf.fromPj(prm.jbuf);
+    codecStat.fromPj(prm.codec_stat);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -106,7 +106,6 @@ typedef struct pjmedia_codec_opus_config
     pj_bool_t  cbr;         /**< Constant bit rate?                     */
 } pjmedia_codec_opus_config;
 
-
 /**
  * Initialize and register Opus codec factory to pjmedia endpoint.
  *
