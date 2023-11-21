@@ -24,7 +24,7 @@ jobs:
 
         SOURCE_BRANCH=feature/APPS-13617
         
-        TARGET_BRANCH=my-im-master
+        TARGET_BRANCH=master
 
         PR_TITLE="Automated Pull Request"
         PR_BODY="This pull request was automatically created by a GitHub Actions workflow."
@@ -36,7 +36,7 @@ jobs:
         echo "TARGET_BRANCH: $TARGET_BRANCH"
         echo "PR_TITLE: $PR_TITLE"
         echo "PR_BODY: $PR_BODY"
-        curl -L \
+        curl -v -L \
           -X POST \
           -H "Accept: application/vnd.github+json" \
           -H "Authorization: Bearer $TOKEN" \
