@@ -12,7 +12,7 @@ env:
   TARGET_BRANCH: master
   PR_TITLE: "Automated Pull Request"
   PR_BODY: "Merge feature/APPS-13617 to master"
-  REVIEWERS: "dshamaev-intermedia, anikitin-intermedia"
+  REVIEWERS: '["dshamaev-intermedia", "anikitin-intermedia"]'
 
 jobs:
   master_to_im_master_pr:
@@ -50,8 +50,9 @@ jobs:
 
       if: success()
       run: |
-        curl -X POST \
+        curl -v
+          -X POST \
           -H "Authorization: Bearer $GITHUB_TOKEN" \
           -H "Accept: application/vnd.github.v3+json" \
           https://api.github.com/repos/$REPO_NAME/pulls/$PR_NUMBER/requested_reviewers \
-          -d "{\"reviewers\":[\"$REVIEWERS\"]}"
+          -d "{\"reviewers\":$REVIEWERS}"
