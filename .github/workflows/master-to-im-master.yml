@@ -17,29 +17,11 @@ jobs:
         fetch-depth: 0
 
     - name: Create Pull Request
-      run: |
-        TOKEN=${{ github.token }}
-        REPO_OWNER=${{ github.repository_owner }}
-        REPO_NAME=${{ github.repository }}
-
-        SOURCE_BRANCH=feature/APPS-13617
-        
-        TARGET_BRANCH=master
-
-        PR_TITLE="Automated Pull Request"
-        PR_BODY="This pull request was automatically created by a GitHub Actions workflow."
-
-        echo "TOKEN: $TOKEN"
-        echo "REPO_OWNER: $REPO_OWNER"
-        echo "REPO_NAME: $REPO_NAME"
-        echo "SOURCE_BRANCH: $SOURCE_BRANCH"
-        echo "TARGET_BRANCH: $TARGET_BRANCH"
-        echo "PR_TITLE: $PR_TITLE"
-        echo "PR_BODY: $PR_BODY"
-        curl -v -L \
-          -X POST \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer $TOKEN" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/pulls \
-          -d '{"title":"$PR_TITLE","body":"$PR_BODY","head":"$SOURCE_BRANCH","base":"$TARGET_BRANCH"}'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        commit-message: update changelog
+        title: Automated Pull Request
+        body: This pull request was automatically created by a GitHub Actions workflow.
+        branch: master
+        base: my-im-master
+        reviewers: dshamaev-intermedia
