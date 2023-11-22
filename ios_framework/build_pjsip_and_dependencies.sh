@@ -68,16 +68,13 @@ PJSIP_LIB_PATHS=(
 )
 
 function build_dependency() {
-    # if [ -z $DEV_MODE ] || [ ! -d "$1/build" ]; then
     current_dir=$PWD
     echo "Building $1 for arch: $2 and sdk: $3"
     cd $4
-    echo $PWD $current_dir
     sh "./$1.sh" $2 $3
     cp -r $4/build/lib/* $output_dir
     echo "$1 build completed."
     cd $current_dir
-    # fi
 }
 
 function build_arch () {

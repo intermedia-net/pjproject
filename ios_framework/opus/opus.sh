@@ -52,18 +52,6 @@ case $CURRENTPATH in
     ;;
 esac
 
-# packLibrary()
-# {
-#     LIBRARY=$1
-#     lipo \
-#         "${CURRENTPATH}/bin/iPhoneSimulator-x86_64.sdk/lib/lib${LIBRARY}.a" \
-#         "${CURRENTPATH}/bin/iPhoneOS-arm64.sdk/lib/lib${LIBRARY}.a" \
-#         "${CURRENTPATH}/bin/iPhoneOS-arm64e.sdk/lib/lib${LIBRARY}.a" \
-#         -create -output ${CURRENTPATH}/build/lib/lib${LIBRARY}.a
-
-#     lipo -info ${CURRENTPATH}/build/lib/lib${LIBRARY}.a
-# }
-
 set -e
 
 if [ ! -e opus-${VERSION}.tar.gz ]; then
@@ -73,20 +61,13 @@ else
     echo "Using opus-${VERSION}.tar.gz"
 fi
 
-rm -rf "${CURRENTPATH}/bin"
-rm -rf "${CURRENTPATH}/build"
-rm -rf "${CURRENTPATH}/src"
-
-mkdir -p "${CURRENTPATH}/bin"
-mkdir -p "${CURRENTPATH}/build/lib"
-mkdir -p "${CURRENTPATH}/build/include/opus"
-mkdir -p "${CURRENTPATH}/src"
-
-tar zxf opus-${VERSION}.tar.gz -C "${CURRENTPATH}/src"
-cd "${CURRENTPATH}/src/opus-${VERSION}"
-
 ARCH=$1
 SDK=$2
+BUILD_DIR="${CURRENTPATH}/bin"
+SOURCE_DIR="${CURRENTPATH}/src"
+DESTINATION_DIR="${CURRENTPATH}/build"
+DESTINATION_LIB_DIR="$DESTINATION_DIR/lib"
+DESTINATION_HEADERS_DIR="$DESTINATION_DIR/include/opus"
 
 if [[ "${ARCH}" == "x86_64" ]];
 then
@@ -104,54 +85,77 @@ else
     ios_version_flag="-miphoneos-version-min=$MIN_IOS_VERSION"
 fi
 
+INSTALL_DIR="$BUILD_DIR/${PLATFORM}-${ARCH}.sdk"
 
-export CROSS_TOP=`xcrun -sdk $SDK --show-sdk-platform-path`/Developer
-export CROSS_SDK="${PLATFORM}.sdk"
-export BUILD_TOOLS="${DEVELOPER}"
+_build() {
+    rm -rf $INSTALL_DIR 
+    mkdir -p $INSTALL_DIR 
 
-echo "Building opus-${VERSION} for ${PLATFORM} ${ARCH}"
-echo "Please stand by..."
+    export CROSS_TOP=`xcrun -sdk $SDK --show-sdk-platform-path`/Developer
+    export CROSS_SDK="${PLATFORM}.sdk"
+    export BUILD_TOOLS="${DEVELOPER}"
 
-mkdir -p "${CURRENTPATH}/bin/${PLATFORM}-${ARCH}.sdk"
-LOG="${CURRENTPATH}/bin/${PLATFORM}-${ARCH}.sdk/build-opus-${VERSION}.log"
+    echo "Building opus-${VERSION} for ${PLATFORM} ${ARCH}"
+    echo "Please stand by..."
 
-export CC="xcrun -sdk ${SDK} clang $ios_version_flag -arch ${ARCH}"
-CFLAGS="-arch ${ARCH} -D__OPTIMIZE__ -fembed-bitcode"
+    mkdir -p $INSTALL_DIR
+    LOG="$INSTALL_DIR/build-opus-${VERSION}.log"
 
-set +e
-INSTALL_DIR="${CURRENTPATH}/bin/${PLATFORM}-${ARCH}.sdk"
+    export CC="xcrun -sdk ${SDK} clang $ios_version_flag -arch ${ARCH}"
+    CFLAGS="-arch ${ARCH} -D__OPTIMIZE__ -fembed-bitcode"
 
-./configure --host=${HOST} ${OPUS_CONFIGURE_OPTIONS} --prefix="${INSTALL_DIR}" CFLAGS="${CFLAGS}" > "${LOG}" 2>&1
+    set +e
 
-if [ $? != 0 ];
+    ./configure --host=${HOST} ${OPUS_CONFIGURE_OPTIONS} --prefix="${INSTALL_DIR}" CFLAGS="${CFLAGS}" > "${LOG}" 2>&1
+
+    if [ $? != 0 ];
+    then
+        echo "Problem while configure - Please check ${LOG}"
+        exit 1
+    fi
+
+    # add -isysroot to CC=
+    sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} $ios_version_flag !" "Makefile"
+
+    if [ "$1" == "verbose" ];
+    then
+        make -j$(sysctl -n hw.ncpu)
+    else
+        make -j$(sysctl -n hw.ncpu) >> "${LOG}" 2>&1
+    fi
+
+    if [ $? != 0 ];
+    then
+        echo "Problem while make - Please check ${LOG}"
+        exit 1
+    fi
+
+    set -e
+    make install >> "${LOG}" 2>&1
+    make clean >> "${LOG}" 2>&1
+}
+
+_copy_to_destination() {
+    cp $INSTALL_DIR/lib/*.a $DESTINATION_LIB_DIR
+    cp $INSTALL_DIR/include/opus/*.h $DESTINATION_HEADERS_DIR
+}
+
+rm -rf $DESTINATION_DIR
+mkdir -p $DESTINATION_LIB_DIR
+mkdir -p $DESTINATION_HEADERS_DIR
+
+if [ -z $DEV_MODE ] || [ ! -d "$INSTALL_DIR" ];
 then
-    echo "Problem while configure - Please check ${LOG}"
-    exit 1
-fi
+    echo Unpacking Opus
+    rm -rf $SOURCE_DIR
+    mkdir -p $SOURCE_DIR 
+    tar zxf opus-${VERSION}.tar.gz -C "$SOURCE_DIR"
+    cd "$SOURCE_DIR/opus-${VERSION}"
 
-# add -isysroot to CC=
-sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} $ios_version_flag !" "Makefile"
-
-if [ "$1" == "verbose" ];
-then
-    make -j$(sysctl -n hw.ncpu)
+    _build
+    _copy_to_destination
+    echo "Building done."
 else
-    make -j$(sysctl -n hw.ncpu) >> "${LOG}" 2>&1
+    echo DEV mode is enabled and OPUS library for $SDK and $ARCH already built. Reusing it.
+    _copy_to_destination 
 fi
-
-if [ $? != 0 ];
-then
-    echo "Problem while make - Please check ${LOG}"
-    exit 1
-fi
-
-set -e
-make install >> "${LOG}" 2>&1
-make clean >> "${LOG}" 2>&1
-cp $INSTALL_DIR/lib/*.a $CURRENTPATH/build/lib
-cp $INSTALL_DIR/include/opus/*.h $CURRENTPATH/build/include/opus 
-
-# packLibrary "opus"
-
-cd ${CURRENTPATH}
-echo "Building done."

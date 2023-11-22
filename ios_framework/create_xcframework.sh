@@ -38,11 +38,11 @@ mkdir -p "${XCFRAMEWORK_DIR}"
 IOS_LIB_IDENTIFIER="ios-arm64"
 IOS_SIM_LIB_IDENTIFIER="ios-arm64_x86_64-simulator"
 
-IOS_LIB_DIR="${XCFRAMEWORK_DIR}/${IOS_LIB_IDENTIFIER}/PJSipIOS.framework"
-IOS_SIM_DIR="${XCFRAMEWORK_DIR}/${IOS_SIM_LIB_IDENTIFIER}/PJSipIOS.framework"
+ARM64_DIR="${XCFRAMEWORK_DIR}/${IOS_LIB_IDENTIFIER}/PJSipIOS.framework"
+SIMULATOR_DIR="${XCFRAMEWORK_DIR}/${IOS_SIM_LIB_IDENTIFIER}/PJSipIOS.framework"
 
-mkdir -p "$IOS_LIB_DIR/lib"
-mkdir -p "$IOS_SIM_DIR/lib"
+mkdir -p "$ARM64_DIR/lib"
+mkdir -p "$SIMULATOR_DIR/lib"
 
 LIB_IOS_INDEX=0
 LIB_IOS_SIMULATOR_INDEX=1
@@ -53,21 +53,21 @@ plist_add_architecture $LIB_IOS_INDEX "arm64"
 plist_add_architecture $LIB_IOS_SIMULATOR_INDEX "arm64"
 plist_add_architecture $LIB_IOS_SIMULATOR_INDEX "x86_64"
 
-cp -r $SOURCE_DIR/arm64/* "$IOS_LIB_DIR/lib"
+cp -r $SOURCE_DIR/arm64/* "$ARM64_DIR/lib"
 
-cp -r $BASE_DIR/Sources/* "$IOS_LIB_DIR/" 
-cp -r $BASE_DIR/Sources/* "$IOS_SIM_DIR/" 
+cp -r $BASE_DIR/Sources/* "$ARM64_DIR/" 
+cp -r $BASE_DIR/Sources/* "$SIMULATOR_DIR/" 
 
 ARM_SIM_DIR="$SOURCE_DIR/arm64-simulator"
 X86_SIM_DIR="$SOURCE_DIR/x86_64-simulator"
 
 for file in "$ARM_SIM_DIR"/*; do
     filename=$(basename "$file")
-    lipo -create -output "$IOS_SIM_DIR/lib/$filename" "$ARM_SIM_DIR/$filename" "$X86_SIM_DIR/$filename"   
+    lipo -create -output "$SIMULATOR_DIR/lib/$filename" "$ARM_SIM_DIR/$filename" "$X86_SIM_DIR/$filename"   
 done
 
-libtool -static -o $IOS_LIB_DIR/PJSipIOS $IOS_LIB_DIR/lib/* 
-libtool -static -o $IOS_SIM_DIR/PJSipIOS $IOS_SIM_DIR/lib/*
+libtool -static -o $ARM64_DIR/PJSipIOS $ARM64_DIR/lib/* 
+libtool -static -o $SIMULATOR_DIR/PJSipIOS $SIMULATOR_DIR/lib/*
 
-rm -rf $IOS_LIB_DIR/lib 
-rm -rf $IOS_SIM_DIR/lib 
+rm -rf $ARM64_DIR/lib 
+rm -rf $SIMULATOR_DIR/lib 
