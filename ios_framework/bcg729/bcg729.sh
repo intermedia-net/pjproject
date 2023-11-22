@@ -80,6 +80,8 @@ _build() {
     mkdir -p $INSTALL_DIR/logs 
 
     echo "Configurating bcg729-${VERSION} for sdk: $SDK arch: $ARCH platform: $PLATFORM ..."
+    echo Xcode path: $DEVELOPER
+    
     cmake . -G Xcode \
         -DPLATFORM=$PLATFORM \
         -DDEPLOYMENT_TARGET=${MIN_IOS_VERSION} \

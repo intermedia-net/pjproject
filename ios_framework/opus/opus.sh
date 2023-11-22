@@ -96,6 +96,7 @@ _build() {
     export BUILD_TOOLS="${DEVELOPER}"
 
     echo "Building opus-${VERSION} for ${PLATFORM} ${ARCH}"
+    echo Toolchain: $CROSS_TOP
     echo "Please stand by..."
 
     mkdir -p $INSTALL_DIR

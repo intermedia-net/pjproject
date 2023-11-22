@@ -84,6 +84,7 @@ _build() {
     CONFIG_LOG="${INSTALL_DIR}/config-openssl-${VERSION}.log"
 
     echo "Building ${OPENSSL_VERSION} || ${PLATFORM} ${ARCH}"
+    echo Toolchain: $CROSS_TOP
 
     if [ "$SDK" == "iphonesimulator" ];
     then
