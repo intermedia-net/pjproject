@@ -1,7 +1,6 @@
 #!/bin/sh
 
 MIN_IOS_VERSION="14.0"
-BASE_DIR=`pwd -P`
 
 for i in "$@"; do
   case $i in
@@ -33,10 +32,12 @@ check_or_exit "output directory using --output-dir" $output_dir
 check_or_exit "source directory using --source-dir" $source_dir
 check_or_exit "framework name using --name" $framework_name
 
-framework_dir="$BASE_DIR/Sources"
+
+base_dir=`pwd -P`
+framework_dir="$base_dir/Sources"
 build_dir="$PWD/tmp"
 xcframework_name="PJSipIOS.xcframework"
-xcframework_path="$BASE_DIR/$xcframework_name"
+xcframework_path="$base_dir/$xcframework_name"
 
 # prerequisites
 function checker() {
@@ -85,24 +86,23 @@ function build_pjsip() {
     arguments="$arguments --source-dir=$source_dir"
     arguments="$arguments --arch=$arch"
     arguments="$arguments --sdk=$sdk"
-    arguments="$arguments --opus=$BASE_DIR/opus"
-    arguments="$arguments --openssl=$BASE_DIR/openssl"
-    arguments="$arguments --bcg729=$BASE_DIR/bcg729"
+    arguments="$arguments --opus=$base_dir/opus"
+    arguments="$arguments --openssl=$base_dir/openssl"
+    arguments="$arguments --bcg729=$base_dir/bcg729"
 
     sh ./build_pjsip_and_dependencies.sh $arguments
 }
 
 function archive_xcframework() {
-    echo "Starting final assembly..."
+    echo "Wll archive XCFramework..."
     
     artefact_file_name="$framework_name.zip"
     zip -r "$artefact_file_name" ./$xcframework_name
     mkdir -p $output_dir
     mv $artefact_file_name $output_dir
-
     rm -rf $xcframework_path
 
-    echo "Final assembly has finished and moved to $output_dir"
+    echo "XCFramework archived and moved to $output_dir"
 }
 
 function copy_headers() {
@@ -134,17 +134,14 @@ function copy_headers() {
 
 check_prerequisites
 
-rm -rf $BUILD_DIR
-mkdir -p $BUILD_DIR
 rm -rf $build_dir
-
-cp $BASE_DIR/config_site.h "$source_dir/pjlib/include/pj"
+cp $base_dir/config_site.h "$source_dir/pjlib/include/pj"
 
 build_pjsip arm64 iphoneos
 build_pjsip x86_64 iphonesimulator
 build_pjsip arm64 iphonesimulator
 
-sh ./create_xcframework.sh $BASE_DIR $build_dir $xcframework_path
+sh ./create_xcframework.sh $base_dir $build_dir $xcframework_path
 copy_headers $xcframework_path/ios-arm64/PJSipIOS.framework/Headers 
 copy_headers $xcframework_path/ios-arm64_x86_64-simulator/PJSipIOS.framework/Headers
 
