@@ -5129,10 +5129,7 @@ static void pjsua_call_on_state_changed(pjsip_inv_session *inv,
     }
 
     /* Release locks before calling callbacks, to avoid deadlock. */
-    while (PJSUA_LOCK_IS_LOCKED()) {
-        num_locks++;
-        PJSUA_UNLOCK();
-    }
+    num_locks = PJSUA_RELEASE_LOCK();
 
     /* Ticket #1627: Invoke on_call_tsx_state() when call is disconnected.
      *
@@ -5154,8 +5151,7 @@ static void pjsua_call_on_state_changed(pjsip_inv_session *inv,
         (*pjsua_var.ua_cfg.cb.on_call_state)(call->index, e);
 
     /* Re-acquire the locks. */
-    for (;num_locks > 0; num_locks--)
-        PJSUA_LOCK();
+    PJSUA_RELOCK(num_locks);
 
     /* call->inv may be NULL now */
 
