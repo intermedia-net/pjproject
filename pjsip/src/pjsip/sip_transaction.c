@@ -2146,7 +2146,13 @@ static void send_msg_callback( pjsip_send_state *send_state,
 
             /* Terminate transaction, if it's not already terminated. */
             tsx_set_status_code(tsx, sc, &err);
-            if (tsx->state != PJSIP_TSX_STATE_TERMINATED &&
+            /* For UAC tsx, we directly terminate the transaction.
+             * For UAS tsx, we terminate the transaction for 502 error,
+             * and will retry for 503.
+             * See #3805 and #3806.
+             */
+            if ((tsx->role == PJSIP_ROLE_UAC || sc == PJSIP_SC_BAD_GATEWAY) &&
+                tsx->state != PJSIP_TSX_STATE_TERMINATED &&
                 tsx->state != PJSIP_TSX_STATE_DESTROYED)
             {
                 /* Set tsx state to TERMINATED, but release the lock
@@ -2218,7 +2224,16 @@ static void transport_callback(void *token, pjsip_tx_data *tdata,
     pj_grp_lock_acquire(tsx->grp_lock);
     tsx->transport_flag &= ~(TSX_HAS_PENDING_TRANSPORT);
 
-    if (sent > 0) {
+    if (sent > 0 || tsx->role == PJSIP_ROLE_UAS) {
+        if (sent < 0) {
+            /* For UAS transactions, we just print error log
+             * and continue as per normal.
+             */
+            PJ_PERROR(2,(tsx->obj_name, (pj_status_t)-sent,
+                          "Transport failed to send %s!",
+                          pjsip_tx_data_get_info(tdata)));
+        }
+
         /* Pending destroy? */
         if (tsx->transport_flag & TSX_HAS_PENDING_DESTROY) {
             tsx_set_state( tsx, PJSIP_TSX_STATE_DESTROYED,
@@ -2251,7 +2266,7 @@ static void transport_callback(void *token, pjsip_tx_data *tdata,
     }
     pj_grp_lock_release(tsx->grp_lock);
 
-    if (sent < 0) {
+    if (sent < 0 && tsx->role == PJSIP_ROLE_UAC) {
         pj_time_val delay = {0, 0};
 
         PJ_PERROR(2,(tsx->obj_name, (pj_status_t)-sent,
@@ -2386,8 +2401,11 @@ static pj_status_t tsx_send_msg( pjsip_transaction *tsx,
 
     /* If we have resolved the server, we treat the error as permanent error.
      * Terminate transaction with transport error failure.
+     * Only applicable for UAC transactions.
      */
-    if (tsx->transport_flag & TSX_HAS_RESOLVED_SERVER) {
+    if (tsx->role == PJSIP_ROLE_UAC &&
+        (tsx->transport_flag & TSX_HAS_RESOLVED_SERVER))
+    {
         
         char errmsg[PJ_ERR_MSG_SIZE];
         pj_str_t err;
