@@ -246,9 +246,11 @@ pj_status_t pjsua_media_subsys_destroy(unsigned flags)
     return PJ_SUCCESS;
 }
 
-static int get_media_ip_version(pjsua_call_media *call_med)
+static int get_media_ip_version(pjsua_call_media *call_med,
+                                const pjmedia_sdp_session *rem_sdp)
 {
-    pjmedia_sdp_session *rem_sdp = call_med->call->async_call.rem_sdp;
+#if PJ_HAS_IPV6
+
     pjsua_ipv6_use ipv6_use;
 
     ipv6_use = pjsua_var.acc[call_med->call->acc_id].cfg.ipv6_media_use;
@@ -276,6 +278,10 @@ static int get_media_ip_version(pjsua_call_media *call_med)
             return 6;
         }
     }
+#else
+    PJ_UNUSED_ARG(call_med);
+    PJ_UNUSED_ARG(rem_sdp);
+#endif
 
     /* Use IPv4. */
     return 4;
@@ -287,7 +293,8 @@ static int get_media_ip_version(pjsua_call_media *call_med)
  */
 static pj_status_t create_rtp_rtcp_sock(pjsua_call_media *call_med,
                                         const pjsua_transport_config *cfg,
-                                        pjmedia_sock_info *skinfo)
+                                        pjmedia_sock_info *skinfo,
+                                        const pjmedia_sdp_session *rem_sdp)
 {
     enum {
         RTP_RETRY = 100
@@ -302,8 +309,8 @@ static pj_status_t create_rtp_rtcp_sock(pjsua_call_media *call_med,
     pjsua_acc *acc = &pjsua_var.acc[call_med->call->acc_id];
     pj_sock_t sock[2];
 
-    use_ipv6 = (get_media_ip_version(call_med) == 6);
-    use_nat64 = (acc->cfg.nat64_opt != PJSUA_NAT64_DISABLED);
+    use_ipv6 = (get_media_ip_version(call_med, rem_sdp) == 6);
+    use_nat64 = PJ_HAS_IPV6 && (acc->cfg.nat64_opt != PJSUA_NAT64_DISABLED);
     af = (use_ipv6 || use_nat64) ? pj_AF_INET6() : pj_AF_INET();
 
     /* Make sure STUN server resolution has completed */
@@ -705,12 +712,13 @@ on_error:
 
 /* Create normal UDP media transports */
 static pj_status_t create_udp_media_transport(const pjsua_transport_config *cfg,
-                                              pjsua_call_media *call_med)
+                                              pjsua_call_media *call_med,
+                                              const pjmedia_sdp_session *rem_sdp)
 {
     pjmedia_sock_info skinfo;
     pj_status_t status;
 
-    status = create_rtp_rtcp_sock(call_med, cfg, &skinfo);
+    status = create_rtp_rtcp_sock(call_med, cfg, &skinfo, rem_sdp);
     if (status != PJ_SUCCESS) {
         pjsua_perror(THIS_FILE, "Unable to create RTP/RTCP socket",
                      status);
@@ -745,7 +753,8 @@ on_error:
 /* Create loop media transport */
 static pj_status_t create_loop_media_transport(
                        const pjsua_transport_config *cfg,
-                       pjsua_call_media *call_med)
+                       pjsua_call_media *call_med,
+                       const pjmedia_sdp_session *rem_sdp)
 {
     pj_status_t status;
     pjmedia_loop_tp_setting opt;
@@ -753,8 +762,8 @@ static pj_status_t create_loop_media_transport(
     int af;
     pjsua_acc *acc = &pjsua_var.acc[call_med->call->acc_id];
 
-    use_ipv6 = (get_media_ip_version(call_med) == 6);
-    use_nat64 = (acc->cfg.nat64_opt != PJSUA_NAT64_DISABLED);
+    use_ipv6 = (get_media_ip_version(call_med, rem_sdp) == 6);
+    use_nat64 = PJ_HAS_IPV6 && (acc->cfg.nat64_opt != PJSUA_NAT64_DISABLED);
     af = (use_ipv6 || use_nat64) ? pj_AF_INET6() : pj_AF_INET();
 
     pjmedia_loop_tp_setting_default(&opt);
@@ -992,36 +1001,11 @@ static void on_ice_complete(pjmedia_transport *tp,
 }
 
 
-/* Parse "HOST:PORT" format */
-static pj_status_t parse_host_port(const pj_str_t *host_port,
-                                   pj_str_t *host, pj_uint16_t *port)
-{
-    pj_str_t str_port;
-
-    str_port.ptr = pj_strchr(host_port, ':');
-    if (str_port.ptr != NULL) {
-        int iport;
-
-        host->ptr = host_port->ptr;
-        host->slen = (str_port.ptr - host->ptr);
-        str_port.ptr++;
-        str_port.slen = host_port->slen - host->slen - 1;
-        iport = (int)pj_strtoul(&str_port);
-        if (iport < 1 || iport > 65535)
-            return PJ_EINVAL;
-        *port = (pj_uint16_t)iport;
-    } else {
-        *host = *host_port;
-        *port = 0;
-    }
-
-    return PJ_SUCCESS;
-}
-
 /* Create ICE media transports (when ice is enabled) */
 static pj_status_t create_ice_media_transport(
                                 const pjsua_transport_config *cfg,
                                 pjsua_call_media *call_med,
+                                const pjmedia_sdp_session *remote_sdp,
                                 pj_bool_t async)
 {
     char stunip[PJ_INET6_ADDRSTRLEN];
@@ -1036,8 +1020,8 @@ static pj_status_t create_ice_media_transport(
     pjmedia_sdp_session *rem_sdp;
 
     acc_cfg = &pjsua_var.acc[call_med->call->acc_id].cfg;
-    use_ipv6 = (get_media_ip_version(call_med) == 6);
-    use_nat64 = (acc_cfg->nat64_opt != PJSUA_NAT64_DISABLED);
+    use_ipv6 = (get_media_ip_version(call_med, remote_sdp) == 6);
+    use_nat64 = PJ_HAS_IPV6 && (acc_cfg->nat64_opt != PJSUA_NAT64_DISABLED);
 
     /* Make sure STUN server resolution has completed */
     if (pjsua_media_acc_is_using_stun(call_med->call->acc_id)) {
@@ -1183,9 +1167,13 @@ static pj_status_t create_ice_media_transport(
         }
 
         /* Configure TURN server */
-        status = parse_host_port(&acc_cfg->turn_cfg.turn_server,
-                                 &ice_cfg.turn_tp[0].server,
-                                 &ice_cfg.turn_tp[0].port);
+
+        /* Parse the server entry into host:port */
+        status = pj_sockaddr_parse2(pj_AF_UNSPEC(), 0,
+                                    &acc_cfg->turn_cfg.turn_server,
+                                    &ice_cfg.turn_tp[0].server,
+                                    &ice_cfg.turn_tp[0].port,
+                                    NULL);
         if (status != PJ_SUCCESS || ice_cfg.turn_tp[0].server.slen == 0) {
             PJ_LOG(1,(THIS_FILE, "Invalid TURN server setting"));
             return PJ_EINVAL;
@@ -2006,6 +1994,7 @@ pj_bool_t  pjsua_call_media_is_changing(pjsua_call *call)
 /* Initialize the media line */
 pj_status_t pjsua_call_media_init(pjsua_call_media *call_med,
                                   pjmedia_type type,
+                                  const pjmedia_sdp_session *rem_sdp,
                                   const pjsua_transport_config *tcfg,
                                   int security_level,
                                   int *sip_err_code,
@@ -2049,9 +2038,10 @@ pj_status_t pjsua_call_media_init(pjsua_call_media *call_med,
         pjsua_set_media_tp_state(call_med, PJSUA_MED_TP_CREATING);
 
         if (acc->cfg.use_loop_med_tp) {
-            status = create_loop_media_transport(tcfg, call_med);
+            status = create_loop_media_transport(tcfg, call_med, rem_sdp);
         } else if (acc->cfg.ice_cfg.enable_ice) {
-            status = create_ice_media_transport(tcfg, call_med, async);
+            status = create_ice_media_transport(tcfg, call_med, rem_sdp,
+                                                async);
             if (async && status == PJ_EPENDING) {
                 /* We will resume call media initialization in the
                  * on_ice_complete() callback.
@@ -2062,7 +2052,7 @@ pj_status_t pjsua_call_media_init(pjsua_call_media *call_med,
                 return PJ_EPENDING;
             }
         } else {
-            status = create_udp_media_transport(tcfg, call_med);
+            status = create_udp_media_transport(tcfg, call_med, rem_sdp);
         }
 
         if (status != PJ_SUCCESS) {
@@ -2538,15 +2528,17 @@ pj_status_t pjsua_media_channel_init(pjsua_call_id call_id,
             PJ_LOG(4,(THIS_FILE, "Call %d: setting media direction "
                                  "#%d to %d.", call_id, mi,
                                  call_med->def_dir));
-        } else if (!reinit) {
-            /* Initialize default initial media direction as bidirectional */
+        } else if (!reinit || mi >= call->med_cnt) {
+            /* Initialize default media direction as bidirectional,
+             * for initial media or newly added media.
+             */
             call_med->def_dir = PJMEDIA_DIR_ENCODING_DECODING;
         }
 
         if (enabled) {
             call_med->enable_rtcp_mux = acc->cfg.enable_rtcp_mux;
 
-            status = pjsua_call_media_init(call_med, media_type,
+            status = pjsua_call_media_init(call_med, media_type, rem_sdp,
                                            &acc->cfg.rtp_cfg,
                                            security_level, sip_err_code,
                                            async,
@@ -2825,9 +2817,11 @@ pj_status_t pjsua_media_channel_create_sdp(pjsua_call_id call_id,
                 pj_bool_t use_ipv6;
                 pj_bool_t use_nat64;
 
-                use_ipv6 = (pjsua_var.acc[call->acc_id].cfg.ipv6_media_use !=
+                use_ipv6 = PJ_HAS_IPV6 &&
+                           (pjsua_var.acc[call->acc_id].cfg.ipv6_media_use !=
                             PJSUA_IPV6_DISABLED);
-                use_nat64 = (pjsua_var.acc[call->acc_id].cfg.nat64_opt !=
+                use_nat64 = PJ_HAS_IPV6 &&
+                            (pjsua_var.acc[call->acc_id].cfg.nat64_opt !=
                              PJSUA_NAT64_DISABLED);
 
                 m->conn = PJ_POOL_ZALLOC_T(pool, pjmedia_sdp_conn);
