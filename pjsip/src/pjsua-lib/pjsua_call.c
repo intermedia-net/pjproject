@@ -1696,8 +1696,8 @@ pj_bool_t pjsua_call_on_incoming(pjsip_rx_data *rdata)
         acc_id = call->acc_id = pjsua_acc_find_for_incoming(rdata);
         if (acc_id == PJSUA_INVALID_ID) {
             if (!pjsua_var.ua_cfg.ignore_unexpected_invites) {
-                pjsip_endpt_respond_stateless(pjsua_var.endpt, rdata,
-                                              PJSIP_SC_TEMPORARILY_UNAVAILABLE,
+				ret_st_code = PJSIP_SC_TEMPORARILY_UNAVAILABLE;
+                pjsip_endpt_respond_stateless(pjsua_var.endpt, rdata, ret_st_code,
                                               NULL, NULL, NULL);
                 PJ_LOG(2,(THIS_FILE,
                           "Unable to accept incoming call (no available account)"));
