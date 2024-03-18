@@ -803,6 +803,22 @@ PJ_DEF(pj_status_t) pjmedia_codec_mgr_dealloc_codec(pjmedia_codec_mgr *mgr,
     return (*codec->factory->op->dealloc_codec)(codec->factory, codec);
 }
 
+
+/*
+ * Initialize codec stat.
+ */
+PJ_DEF(void) pjmedia_codec_stat_default(pjmedia_codec_stat *stat)
+{
+    pj_bzero(stat, sizeof(pjmedia_codec_stat));
+    stat->opus.pkt_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
+    stat->opus.pkt_with_fec_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
+    stat->opus.aud_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
+    stat->opus.fec_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
+    stat->opus.recover_with_copy_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
+    stat->opus.recover_with_plc_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
+    stat->opus.recover_with_fec_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
+}
+
 /* Internal: Get array of codec IDs with dynamic PT. */
 pj_status_t pjmedia_codec_mgr_get_dyn_codecs(pjmedia_codec_mgr* mgr,
                                              pj_int8_t *count,
@@ -824,20 +840,5 @@ pj_status_t pjmedia_codec_mgr_get_dyn_codecs(pjmedia_codec_mgr* mgr,
     pj_mutex_unlock(mgr->mutex);
 
     return PJ_SUCCESS;
-}
-
-/*
- * Initialize codec stat.
- */
-PJ_DEF(void) pjmedia_codec_stat_default(pjmedia_codec_stat *stat)
-{
-    pj_bzero(stat, sizeof(pjmedia_codec_stat));
-    stat->opus.pkt_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
-    stat->opus.pkt_with_fec_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
-    stat->opus.aud_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
-    stat->opus.fec_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
-    stat->opus.recover_with_copy_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
-    stat->opus.recover_with_plc_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
-    stat->opus.recover_with_fec_cnt = PJMEDIA_CODEC_STAT_NOT_SPECIFIED;
 }
 
