@@ -38,6 +38,7 @@
 #include <pjnath/turn_session.h>
 #include <pjnath/turn_sock.h>
 #include <pjnath/types.h>
+#include <pjnath/nat64.h>
 
 /* UPnP */
 #include <pjnath/upnp.h>
