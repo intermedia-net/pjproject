@@ -1,13 +1,25 @@
 
 #include <pj/types.h>
+
 #include <pjsip-ua/sip_inv.h>
 #include <pjsip/sip_types.h>
-#include <pjsua.h>
-#include <pjsua-lib/pjsua_internal.h>
 
-#include <pjnath/pj-nat64.h>
+#include <pjsua.h>
+
+#include <pjnat64/pj-nat64.h>
 
 #define THIS_FILE "pj_nat64.c"
+
+#define MODULE_VERSION "$Id: 497af2bf5811a519a87deb9821451887ec3200e6 $"
+
+/**
+ * Use algorithmic map
+ *
+ * @see https://datatracker.ietf.org/doc/html/rfc6052#section-2.1
+ */
+#ifndef USE_RFC6052
+# define USE_RFC6052 0
+#endif
 
 /* Interface */
 
@@ -389,35 +401,52 @@ static void map_ipv4_with_ipv6(pj_pool_t *pool, pj_str_t *dst, pj_str_t *src)
 {
     pj_sockaddr src_addr;
     pj_sockaddr dst_addr;
-    char prefix[4] = { 0x00, 0x64, 0xff, 0x9b }; // IPv6 map "64:ff96::/96"
+    pj_status_t status;
+    // IPv6 Well Known address - "64:ff96::/96"
+    //                   00    64:   ff    9b :  00    00 :  00    00 :   00    00 :  00    00 :  00    00 :  00    00
+    //                                                                                             8     8     8     8
+    char prefix[16] = { 0x00, 0x64, 0xff, 0x9b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
     if (0 == pj_strcmp2(src, "127.0.0.1")) {
         pj_strdup2(pool, dst, "[::1]");
     } else {
-        /* Step 1. Parse source IP address */
-        // TODO - ...
 
-        if (src_addr.addr.sa_family == pj_AF_INET()) {
+        /* Step 1. Parse source IP address */
+        unsigned options = 0;
+        status = pj_sockaddr_parse(PJ_AF_INET, options, (const pj_str_t *)src, &src_addr);
+        if (status != PJ_SUCCESS) {
+            PJ_LOG(1, (THIS_FILE, "Error parse address '%.*s'",
+                (int)src->slen, src->ptr
+            ));
+            return;
+        }
+
+        /* Step 2. */
+        if (src_addr.addr.sa_family == PJ_AF_INET) {
 
             /* Step 1. Initialize result */
-            dst_addr.addr.sa_family = pj_AF_INET6();
-            dst_addr.ipv6.sin6_family = pj_AF_INET6();
-            dst_addr.ipv6.sin6_port = src_addr->ipv4.sin_port;
+            dst_addr.addr.sa_family = PJ_AF_INET6;
+            dst_addr.ipv6.sin6_family = PJ_AF_INET6;
+            dst_addr.ipv6.sin6_port = src_addr.ipv4.sin_port;
             dst_addr.ipv6.sin6_flowinfo = 0;
             dst_addr.ipv6.sin6_scope_id = 0;
 
             /* Step 2. Map address with "::/96" subnet */
-            memset(&dst_addr.ipv6.sin6_addr, 0, sizeof(dst_addr.ipv6.sin6_addr));
-            memcpy(&dst_addr.ipv6.sin6_addr, prefix, sizeof(prefix));
-            memcpy(&dst_addr.ipv6.sin6_addr + 10, &src_addr.ipv4.sin_addr, sizeof(src_addr.ipv4.sin_addr));
+            char *ptr = &dst_addr.ipv6.sin6_addr;
+            memcpy(ptr, &prefix[0], sizeof(prefix));
+            memcpy(ptr + 12, &src_addr.ipv4.sin_addr, sizeof(src_addr.ipv4.sin_addr));
 
             /* Step 3. Print result */
-            // TODO - print address at destination...
+            unsigned flags = 2;
+            char tmp[128] = { 0 };
+            pj_sockaddr_print(&dst_addr, tmp, 128, flags);
+            pj_strdup2(pool, dst, tmp);
 
         } else {
             PJ_LOG(4, (THIS_FILE, "Map IPv4 -> IPv6 address: provide IPv6 address: '%.*s'",
-                (int)src.slen. src.ptr
+                (int)src->slen, src->ptr
             ));
+            return;
         }
     }
 
@@ -465,39 +494,37 @@ static void map_ipv6_with_ipv4(pj_pool_t *pool, pj_str_t *dst, pj_str_t *src)
         pj_strdup2(pool, dst, "127.0.0.1");
     } else {
 
-        int af = pj_AF_INET6();
         unsigned options = 0;
-        status = pj_sockaddr_parse(af, options, (const pj_str_t *)src, &src_addr);
+        status = pj_sockaddr_parse(PJ_AF_INET6, options, (const pj_str_t *)src, &src_addr);
         if (status != PJ_SUCCESS) {
-            // TODO - What on error? Try resolve?
+            PJ_LOG(1, (THIS_FILE, "Error parse address '%.*s'",
+                (int)src->slen, src->ptr
+            ));
+            return;
         }
 
-        if (src_addr.addr.sa_family == pj_AF_INET6()) {
-
-// TODO - check `pj_sockaddr_synthesize` ...
+        if (src_addr.addr.sa_family == PJ_AF_INET6) {
 
             /* Step 1. Initialize result */
-            dst_addr.addr.sa_family = pj_AF_INET();
-//            dst_addr.ipv6.sin6_family = pj_AF_INET();
-//            dst_addr.ipv6.sin6_port = src_addr->ipv6.sin_port;
-//            dst_addr.ipv6.sin6_flowinfo = 0;
-//            dst_addr.ipv6.sin6_scope_id = 0;
+            dst_addr.addr.sa_family = PJ_AF_INET;
+            dst_addr.ipv4.sin_family = PJ_AF_INET;
+            dst_addr.ipv4.sin_port = src_addr.ipv6.sin6_port;
 
             /* Step 2. Map address with "::/96" subnet */
-//            memset(&dst_addr.ipv6.sin6_addr, 0, sizeof(dst_addr.ipv6.sin6_addr));
-//            memcpy(&dst_addr.ipv6.sin6_addr, prefix, sizeof(prefix));
-//            memcpy(&dst_addr.ipv6.sin6_addr + 10, &src_addr.ipv4.sin_addr, sizeof(src_addr.ipv4.sin_addr));
+            char *ptr = &src_addr.ipv6.sin6_addr;
+            memset(&dst_addr.ipv4.sin_addr, 0, sizeof(dst_addr.ipv4.sin_addr));
+            memcpy(&dst_addr.ipv4.sin_addr, ptr + 12, sizeof(src_addr.ipv4.sin_addr));
 
             /* Step 3. Print result */
-            // TODO - print address at destination...
             unsigned flags = 2;
             pj_sockaddr_print(&dst_addr, tmp, 128, flags);
-            pj_strdup(pool, dst, tmp);
+            pj_strdup2(pool, dst, tmp);
 
         } else {
             PJ_LOG(4, (THIS_FILE, "AMap IPv6 -> IPv4 address: provide IPv4 address: '%.*s'",
-                (int)src.slen. src.ptr
+                (int)src->slen, src->ptr
             ));
+            return;
         }
     }
 
@@ -734,16 +761,27 @@ static void patch_r_uri_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *msg)
 
     /* Step 1. Patch R-URI on request */
     if (msg->type == PJSIP_REQUEST_MSG) {
+        /* Step 1. Get actual R-URI address */
         pjsip_sip_uri *sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(msg->line.req.uri);
-        if (hpbx_in4_addr.slen > 0) {
-            PJ_LOG(5, (THIS_FILE, "TX patch R-URI at SIP message: '%.*s' -> '%.*s'",
-                sip_uri->host.slen, sip_uri->host.ptr,
-                hpbx_in4_addr.slen, hpbx_in4_addr.ptr
+        pj_str_t map_addr = { .slen = 0, .ptr = 0 };
+        /* Step 2. Map IPv6 -> IPv4 address */
+        map_ipv6_with_ipv4(pool, &map_addr, &sip_uri->host);
+        /* Step 3. No mapping use server address */
+        if (map_addr.slen == 0) {
+            PJ_LOG(5, (THIS_FILE, "TX patch R-URI addr use server '%.*s' (failback)",
+                (int)hpbx_in4_addr.slen, hpbx_in4_addr.ptr
             ));
-            sip_uri->host.slen = hpbx_in4_addr.slen;
-            sip_uri->host.ptr = hpbx_in4_addr.ptr;
-        } else {
-            PJ_LOG(5, (THIS_FILE, "TX no patch R-URI at SIP message: no IPv4 addr"));
+            map_addr.slen = hpbx_in4_addr.slen;
+            map_addr.ptr = hpbx_in4_addr.ptr;
+        }
+        /* Step 4. Mapping routine */
+        if (map_addr.slen > 0) {
+            PJ_LOG(5, (THIS_FILE, "TX patch R-URI addr '%.*s' -> '%.*s'",
+                (int)sip_uri->host.slen, sip_uri->host.ptr,
+                (int)map_addr.slen, map_addr.ptr
+            ));
+            sip_uri->host.slen = map_addr.slen;
+            sip_uri->host.ptr = map_addr.ptr;
         }
     }
 
@@ -979,26 +1017,34 @@ static pjsip_module ipv6_module = {
 static void check_network()
 {
     pj_status_t status;
-    int dst_af;
     pj_sockaddr dst_addr = { 0 };
     pj_sockaddr src_addr = { 0 };
 
     /* Step 1. Get Well Know IPv4 network address, example: 8.8.8.8 */
-//    unsigned options = 0;
-//    pj_str_t addr = { .slen = 7, .ptr = "8.8.8.8" };
-//    status = pj_sockaddr_parse(PJ_AF_INET, options, &addr, &src_addr);
-//    if (status != PJ_SUCCESS) {
-//        PJ_LOG(5, (THIS_FILE, "Error parse IPv4 address"));
-//        return;
-//    }
+    unsigned options = 0;
+    pj_str_t src = { .slen = 7, .ptr = "8.8.8.8" };
+    status = pj_sockaddr_parse(PJ_AF_INET, options, &src, &src_addr);
+    if (status != PJ_SUCCESS) {
+        PJ_LOG(4, (THIS_FILE, "Network address synthesize: error parse IPv4 address"));
+        return;
+    }
 
     /* Step 2. Create IPv6 addres */
-//    status = pj_sockaddr_synthesize(dst_af, &dst_addr, &src_addr);
-//    if (status == PJ_SUCCESS) {
-        // TODO - print new network address...
-//    } else {
-        // TODO - no network additional features...
-//    }
+    status = pj_sockaddr_synthesize(PJ_AF_INET6, &dst_addr, &src_addr);
+    if (status != PJ_SUCCESS) {
+        PJ_LOG(4, (THIS_FILE, "Network address synthesize: error synthesize"));
+        return;
+    }
+
+    /* Step 3. Debug convert address */
+    char buf[128] = { 0 };
+    pj_sockaddr_print(&dst_addr, buf, 128, 1 | 2);
+    pj_str_t dst = { .slen = 0, .ptr = buf };
+    dst.slen = strlen(dst.ptr);
+    PJ_LOG(4, (THIS_FILE, "Network address synthesize: covert IPv4 -> IPv6: %.*s -> %.*s",
+        (int)src.slen, src.ptr,
+        (int)dst.slen, dst.ptr
+    ));
 
 }
 
@@ -1006,6 +1052,10 @@ pj_status_t pj_nat64_enable_rewrite_module()
 {
     pjsip_endpoint *endpt = pjsua_get_pjsip_endpt();
     pj_status_t result;
+
+    /* Step 0. Show module version */
+    PJ_LOG(4, (THIS_FILE, "Register NAT64 module version %s", MODULE_VERSION));
+
     /* Step 1. Create module memory home */
     if (mod_pool == NULL) {
 #ifdef MOD_IPV6_ENDPT_MEMORY

@@ -27,8 +27,7 @@ endif
 #
 export _CFLAGS 	:= $(CC_CFLAGS) $(OS_CFLAGS) $(HOST_CFLAGS) $(M_CFLAGS) \
 		   $(CFLAGS) $(CC_INC)../include $(CC_INC)../../pjlib/include \
-		   $(CC_INC)../../pjlib-util/include $(CC_INC)../../pjsip/include \
-		   $(CC_INC)../../pjmedia/include
+		   $(CC_INC)../../pjlib-util/include
 export _CXXFLAGS:= $(_CFLAGS) $(CC_CXXFLAGS) $(OS_CXXFLAGS) $(M_CXXFLAGS) \
 		   $(HOST_CXXFLAGS) $(CXXFLAGS)
 export _LDFLAGS := $(CC_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) $(HOST_LDFLAGS) \
@@ -39,21 +38,12 @@ export _LDFLAGS := $(CC_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) $(HOST_LDFLAGS) \
 #
 export PJNATH_SRCDIR = ../src/pjnath
 export PJNATH_OBJS += $(OS_OBJS) $(M_OBJS) $(CC_OBJS) $(HOST_OBJS) \
-		errno.o ice_session.o ice_strans.o nat_detect.o pj-nat64.o stun_auth.o \
+		errno.o ice_session.o ice_strans.o nat_detect.o stun_auth.o \
 		stun_msg.o stun_msg_dump.o stun_session.o stun_sock.o \
 		stun_transaction.o turn_session.o turn_sock.o upnp.o
 export PJNATH_CFLAGS += $(_CFLAGS)
 export PJNATH_CXXFLAGS += $(_CXXFLAGS)
-export PJNATH_LDFLAGS += \
-	$(PJNATH_LDLIB) \
-	$(PJLIB_UTIL_LDLIB) \
-	$(PJLIB_LDLIB) \
-	$(PJSIP_SIMPLE_LDBLIB) \
-	$(PJSIP_LDLIB) \
-	$(PJSIP_UA_LDLIB) \
-	$(PJSUA_LIB_LDLIB) \
-	$(PJMEDIA_LDLIB) \
-	$(_LDFLAGS)
+export PJNATH_LDFLAGS += $(PJLIB_UTIL_LDLIB) $(PJLIB_LDLIB) $(_LDFLAGS)
 
 ###############################################################################
 # Defines for building test application
@@ -63,16 +53,7 @@ export PJNATH_TEST_OBJS += ice_test.o stun.o sess_auth.o server.o concur_test.o 
 			    stun_sock_test.o turn_sock_test.o test.o
 export PJNATH_TEST_CFLAGS += $(_CFLAGS)
 export PJNATH_TEST_CXXFLAGS += $(_CXXFLAGS)
-export PJNATH_TEST_LDFLAGS += \
-	$(PJNATH_LDLIB) \
-	$(PJLIB_UTIL_LDLIB) \
-	$(PJLIB_LDLIB) \
-	$(PJSIP_SIMPLE_LDBLIB) \
-	$(PJSIP_LDLIB) \
-	$(PJSIP_UA_LDLIB) \
-	$(PJSUA_LIB_LDLIB) \
-	$(PJMEDIA_LDLIB) \
-	$(_LDFLAGS)
+export PJNATH_TEST_LDFLAGS += $(PJNATH_LDLIB) $(PJLIB_UTIL_LDLIB) $(PJLIB_LDLIB) $(_LDFLAGS)
 ifeq ($(EXCLUDE_APP),0)
 export PJNATH_TEST_EXE:=pjnath-test-$(TARGET_NAME)$(HOST_EXE)
 endif
@@ -84,16 +65,7 @@ export PJTURN_CLIENT_SRCDIR = ../src/pjturn-client
 export PJTURN_CLIENT_OBJS += client_main.o
 export PJTURN_CLIENT_CFLAGS += $(_CFLAGS)
 export PJTURN_CLIENT_CXXFLAGS += $(_CXXFLAGS)
-export PJTURN_CLIENT_LDFLAGS += \
-	$(PJNATH_LDLIB) \
-	$(PJLIB_UTIL_LDLIB) \
-	$(PJLIB_LDLIB) \
-	$(PJSIP_SIMPLE_LDBLIB) \
-	$(PJSIP_LDLIB) \
-	$(PJSIP_UA_LDLIB) \
-	$(PJSUA_LIB_LDLIB) \
-	$(PJMEDIA_LDLIB) \
-	$(_LDFLAGS)
+export PJTURN_CLIENT_LDFLAGS += $(PJNATH_LDLIB) $(PJLIB_UTIL_LDLIB) $(PJLIB_LDLIB) $(_LDFLAGS)
 ifeq ($(EXCLUDE_APP),0)
 export PJTURN_CLIENT_EXE:=pjturn-client-$(TARGET_NAME)$(HOST_EXE)
 endif
@@ -106,16 +78,7 @@ export PJTURN_SRV_OBJS += allocation.o auth.o listener_udp.o \
 			  listener_tcp.o server.o main.o
 export PJTURN_SRV_CFLAGS += $(_CFLAGS)
 export PJTURN_SRV_CXXFLAGS += $(_CXXFLAGS)
-export PJTURN_SRV_LDFLAGS += \
-	$(PJNATH_LDLIB) \
-	$(PJLIB_UTIL_LDLIB) \
-	$(PJLIB_LDLIB) \
-	$(PJSIP_SIMPLE_LDBLIB) \
-	$(PJSIP_LDLIB) \
-	$(PJSIP_UA_LDLIB) \
-	$(PJSUA_LIB_LDLIB) \
-	$(PJMEDIA_LDLIB) \
-	$(_LDFLAGS)
+export PJTURN_SRV_LDFLAGS += $(PJNATH_LDLIB) $(PJLIB_UTIL_LDLIB) $(PJLIB_LDLIB) $(_LDFLAGS)
 ifeq ($(EXCLUDE_APP),0)
 export PJTURN_SRV_EXE:=pjturn-srv-$(TARGET_NAME)$(HOST_EXE)
 endif
@@ -200,5 +163,3 @@ depend:
 	echo '$(BINDIR)/$(PJNATH_TEST_EXE): $(LIBDIR)/$(PJNATH_LIB) $(PJLIB_UTIL_LIB) $(PJLIB_LIB)' >> .pjnath-test-$(TARGET_NAME).depend
 	echo '$(BINDIR)/$(PJTURN_CLIENT_EXE): $(LIBDIR)/$(PJNATH_LIB) $(PJLIB_UTIL_LIB) $(PJLIB_LIB)' >> .pjturn-client-$(TARGET_NAME).depend
 	echo '$(BINDIR)/$(PJTURN_SRV_EXE): $(LIBDIR)/$(PJNATH_LIB) $(PJLIB_UTIL_LIB) $(PJLIB_LIB)' >> .pjturn-srv-$(TARGET_NAME).depend
-
-
