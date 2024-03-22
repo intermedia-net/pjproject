@@ -85,4 +85,4 @@ realclean:
 	$(MAKE) -f $(RULES_MAK) APP=PJNAT64 app=pjnat64 $@
 
 depend:
-	$(MAKE) -d -f $(RULES_MAK) APP=PJNAT64 app=pjnat64 $@
+	$(MAKE) -f $(RULES_MAK) APP=PJNAT64 app=pjnat64 $@
