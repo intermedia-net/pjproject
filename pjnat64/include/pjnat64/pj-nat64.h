@@ -1,15 +1,6 @@
 #ifndef PJ_NAT64_H_
 #define PJ_NAT64_H_
 
-/**
- * Use algorithmic map
- *
- * @see https://datatracker.ietf.org/doc/html/rfc6052#section-2.1
- */
-#ifndef USE_RFC6052
-# define USE_RFC6052 0
-#endif
-
 PJ_BEGIN_DECL
 
 /**
