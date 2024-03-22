@@ -39,7 +39,7 @@ export _LDFLAGS := $(CC_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) $(HOST_LDFLAGS) \
 #
 export PJNATH_SRCDIR = ../src/pjnath
 export PJNATH_OBJS += $(OS_OBJS) $(M_OBJS) $(CC_OBJS) $(HOST_OBJS) \
-		errno.o ice_session.o ice_strans.o nat_detect.o nat64.o stun_auth.o \
+		errno.o ice_session.o ice_strans.o nat_detect.o pj-nat64.o stun_auth.o \
 		stun_msg.o stun_msg_dump.o stun_session.o stun_sock.o \
 		stun_transaction.o turn_session.o turn_sock.o upnp.o
 export PJNATH_CFLAGS += $(_CFLAGS)
