@@ -8,7 +8,7 @@
 
 #include <pjnat64/pj-nat64.h>
 
-#define THIS_FILE "pj_nat64.c"
+#define THIS_FILE "pj-nat64.c"
 
 #define MODULE_VERSION "$Id: bcee8cba5968c6869380ef1862bfd1e5039c552e $"
 
