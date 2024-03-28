@@ -10,7 +10,7 @@
 
 #define THIS_FILE "pj_nat64.c"
 
-#define MODULE_VERSION "$Id: 497af2bf5811a519a87deb9821451887ec3200e6 $"
+#define MODULE_VERSION "$Id: bcee8cba5968c6869380ef1862bfd1e5039c552e $"
 
 /**
  * Use algorithmic map
@@ -18,7 +18,7 @@
  * @see https://datatracker.ietf.org/doc/html/rfc6052#section-2.1
  */
 #ifndef USE_RFC6052
-# define USE_RFC6052 0
+# define USE_RFC6052 1
 #endif
 
 /* Interface */
@@ -41,18 +41,51 @@ static void modern_update_tx_data(pjsip_tx_data *tdata, pjsip_msg *msg);
 static void patch_sdp_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *msg);
 static void patch_sdp_ipv4_with_ipv6(pjsip_rx_data *rdata);
 
+/* Struct */
+
+struct addr {
+    pj_str_t in4_addr;  /* IPv4 address */
+    int      in4_port;  /* IPv4 port    */
+    pj_str_t in6_addr;  /* IPv6 address */
+    int      in6_port;  /* IPv6 port    */
+};
+
 /* Consts */
 
 static pj_caching_pool cp;
 static pj_bool_t mod_enable = PJ_TRUE;
 static pj_bool_t mod_debug = PJ_FALSE;
 static pj_pool_t *mod_pool = NULL;
-static pj_str_t hpbx_in6_addr = { .slen = 0, .ptr = NULL };
-static pj_str_t hpbx_in4_addr = { .slen = 0, .ptr = NULL };
-static pj_str_t acc_in6_addr = { .slen = 0, .ptr = NULL };
-static pj_str_t acc_in4_addr = { .slen = 0, .ptr = NULL };
+
+static struct addr hpbx;
+static struct addr acc;
 
 /* Implementation */
+
+/**
+ * Initialize address
+ *
+**/
+static void addr_init(struct addr *adr)
+{
+    /* Initialize IN4 addr */
+    adr->in4_addr.slen = 0;
+    adr->in4_addr.ptr = NULL;
+    adr->in4_port = -1;
+    /* Initialize IN6 addr */
+    adr->in6_addr.slen = 0;
+    adr->in6_addr.ptr = NULL;
+    adr->in6_port = -1;
+}
+
+static void addr_dump(const char *title, struct addr *adr)
+{
+    PJ_LOG(4, (THIS_FILE, "%s = [ IN4 = '%.*s':%d IN6 = '%.*s':%d ]",
+        title,
+        adr->in4_addr.slen, adr->in4_addr.ptr, adr->in4_port,
+        adr->in6_addr.slen, adr->in6_addr.ptr, adr->in6_port
+    ));
+}
 
 /**
  * Modern SDP replace routine on SDP attribute
@@ -69,7 +102,7 @@ static void patch_sdp_attr(pj_pool_t *pool, pjmedia_sdp_media *media, pjmedia_sd
         return;
     }
 
-    PJ_LOG(5, (THIS_FILE, "Process SDP attribute %.*s", attr->name.slen, attr->name.ptr));
+    PJ_LOG(4, (THIS_FILE, "Process SDP attribute %.*s", attr->name.slen, attr->name.ptr));
 
     if (strncmp(attr->name.ptr, rtcp_name.ptr, rtcp_name.slen) == 0) {
         s2 = pjmedia_sdp_attr_get_rtcp(attr, &ra);
@@ -90,7 +123,7 @@ static void patch_sdp_attr(pj_pool_t *pool, pjmedia_sdp_media *media, pjmedia_sd
             ra.addr.slen, ra.addr.ptr
         );
         //
-        PJ_LOG(5, (THIS_FILE, "Patch SDP attribute rtcp = %s", rtcp_buf));
+        PJ_LOG(4, (THIS_FILE, "Patch SDP attribute rtcp = %s", rtcp_buf));
 
         // Update value
         pj_strdup2(pool, &attr->value, rtcp_buf);
@@ -108,7 +141,7 @@ static void patch_sdp_addr(pj_pool_t *pool, pjmedia_sdp_session *sdp, pj_str_t a
 {
 
     /* Debug message */
-    PJ_LOG(5, (THIS_FILE, "Patch SDP body: TYPE -> %.*s ADDR -> %.*s",
+    PJ_LOG(4, (THIS_FILE, "Patch SDP body: TYPE -> %.*s ADDR -> %.*s",
         addr_type.slen, addr_type.ptr,
         addr.slen, addr.ptr
     ));
@@ -195,13 +228,13 @@ static void patch_sdp_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *msg)
 
     /* Step 1. Determine our IPv4 address */
     pj_strdup2(pool, &addr_type, "IP4");
-    pj_strdup(pool, &addr, &acc_in4_addr);
+    pj_strdup(pool, &addr, &acc.in4_addr);
 
     /* Step 2. Get SIP message SDP body */
     pjsip_tdata_sdp_info *sdp_info = pjsip_tdata_get_sdp_info(tdata);
     sdp = sdp_info->sdp;
     if (sdp == NULL) {
-        PJ_LOG(5, (THIS_FILE, "No SDP info on TX"));
+        PJ_LOG(4, (THIS_FILE, "No SDP info on TX"));
         return;
     }
     new_sdp = pjmedia_sdp_session_clone(pool, sdp);
@@ -223,7 +256,7 @@ static void patch_msg_sdp_body(pj_pool_t *pool, pjsip_msg *msg, pjmedia_sdp_sess
     pj_status_t status;
 
     /* Step 0. Debug message */
-    PJ_LOG(5, (THIS_FILE, "Patch SDP body"));
+    PJ_LOG(4, (THIS_FILE, "Patch SDP body"));
 
     /* Step 1. Remove SIP automatic update headers */
     while (pjsip_msg_find_remove_hdr(msg, PJSIP_H_CONTENT_LENGTH, NULL) != NULL);
@@ -286,7 +319,7 @@ static pjmedia_sdp_session *modern_sip_sdp_parse(pj_pool_t *pool, pjsip_msg *msg
 
     /* Step 3. Check SDP body exists */
     if (tmp_msg->body == NULL) {
-        PJ_LOG(5, (THIS_FILE, "SIP message without SIP payload"));
+        PJ_LOG(4, (THIS_FILE, "SIP message without SIP payload"));
         return NULL;
     }
 
@@ -374,13 +407,13 @@ static void patch_sdp_ipv4_with_ipv6(pjsip_rx_data *rdata)
 
     /* Step 1. Prepare HPBX server IPv6 address */
     pj_strdup2(pool, &addr_type, "IP6");
-    pj_strdup(pool, &addr, &hpbx_in6_addr);
+    pj_strdup(pool, &addr, &hpbx.in6_addr);
 
     /* Step 2. Get SIP message SDP body */
     pjsip_rdata_sdp_info *sdp_info = pjsip_rdata_get_sdp_info(rdata);
     sdp = sdp_info->sdp;
     if (sdp == NULL) {
-        PJ_LOG(5, (THIS_FILE, "No SDP info on RX"));
+        PJ_LOG(4, (THIS_FILE, "No SDP info on RX"));
         return;
     }
     new_sdp = pjmedia_sdp_session_clone(pool, sdp);
@@ -399,8 +432,8 @@ static void patch_sdp_ipv4_with_ipv6(pjsip_rx_data *rdata)
 #if defined(USE_RFC6052) && (USE_RFC6052 == 1)
 static void map_ipv4_with_ipv6(pj_pool_t *pool, pj_str_t *dst, pj_str_t *src)
 {
-    pj_sockaddr src_addr;
-    pj_sockaddr dst_addr;
+    struct in_addr in_addr;
+    struct in6_addr in6_addr;
     pj_status_t status;
     // IPv6 Well Known address - "64:ff96::/96"
     //                   00    64:   ff    9b :  00    00 :  00    00 :   00    00 :  00    00 :  00    00 :  00    00
@@ -412,42 +445,29 @@ static void map_ipv4_with_ipv6(pj_pool_t *pool, pj_str_t *dst, pj_str_t *src)
     } else {
 
         /* Step 1. Parse source IP address */
-        unsigned options = 0;
-        status = pj_sockaddr_parse(PJ_AF_INET, options, (const pj_str_t *)src, &src_addr);
+        status = pj_inet_pton(PJ_AF_INET, src, &in_addr);
         if (status != PJ_SUCCESS) {
-            PJ_LOG(1, (THIS_FILE, "Error parse address '%.*s'",
+            PJ_LOG(1, (THIS_FILE, "Error parse address '%.*s' (pj_inet_pton)",
                 (int)src->slen, src->ptr
             ));
             return;
         }
 
-        /* Step 2. */
-        if (src_addr.addr.sa_family == PJ_AF_INET) {
+        /* Step 2. Map address with "::/96" subnet */
+        memcpy(&in6_addr, &prefix[0], sizeof(prefix));
+        char *ptr = &in6_addr;
+        memcpy(ptr + 12, &in_addr, sizeof(in_addr));
 
-            /* Step 1. Initialize result */
-            dst_addr.addr.sa_family = PJ_AF_INET6;
-            dst_addr.ipv6.sin6_family = PJ_AF_INET6;
-            dst_addr.ipv6.sin6_port = src_addr.ipv4.sin_port;
-            dst_addr.ipv6.sin6_flowinfo = 0;
-            dst_addr.ipv6.sin6_scope_id = 0;
-
-            /* Step 2. Map address with "::/96" subnet */
-            char *ptr = &dst_addr.ipv6.sin6_addr;
-            memcpy(ptr, &prefix[0], sizeof(prefix));
-            memcpy(ptr + 12, &src_addr.ipv4.sin_addr, sizeof(src_addr.ipv4.sin_addr));
-
-            /* Step 3. Print result */
-            unsigned flags = 2;
-            char tmp[128] = { 0 };
-            pj_sockaddr_print(&dst_addr, tmp, 128, flags);
-            pj_strdup2(pool, dst, tmp);
-
-        } else {
-            PJ_LOG(4, (THIS_FILE, "Map IPv4 -> IPv6 address: provide IPv6 address: '%.*s'",
+        /* Step 3. Print result */
+        char tmp[PJ_INET6_ADDRSTRLEN] = { 0 };
+        status = pj_inet_ntop(PJ_AF_INET6, &in6_addr, tmp, PJ_INET6_ADDRSTRLEN);
+        if (status != PJ_SUCCESS) {
+            PJ_LOG(1, (THIS_FILE, "Error print address '%.*s' (pj_inet_ntop)",
                 (int)src->slen, src->ptr
             ));
             return;
         }
+        pj_strdup2(pool, dst, tmp);
     }
 
     /* Step 2. Debug message */
@@ -464,12 +484,10 @@ static void map_ipv4_with_ipv6(pj_pool_t *pool, pj_str_t *dst, pj_str_t *src)
     /* Step 1. Map */
     if (0 == pj_strcmp2(src, "127.0.0.1")) {
         pj_strdup2(pool, dst, "[::1]");
-    } else if (0 == pj_strcmp(src, &acc_in4_addr)) {
-        pj_strdup(pool, dst, &acc_in6_addr);
-    } else if (0 == pj_strcmp(src, &hpbx_in4_addr)) {
-        pj_strdup(pool, dst, &hpbx_in6_addr);
-    } else {
-        pj_strdup(pool, dst, &hpbx_in6_addr);
+    } else if (0 == pj_strcmp(src, &acc.in4_addr)) {
+        pj_strdup(pool, dst, &acc.in6_addr);
+    } else if (0 == pj_strcmp(src, &hpbx.in4_addr)) {
+        pj_strdup(pool, dst, &hpbx.in6_addr);
     }
 
     /* Step 2. Debug message */
@@ -484,9 +502,10 @@ static void map_ipv4_with_ipv6(pj_pool_t *pool, pj_str_t *dst, pj_str_t *src)
 #if defined(USE_RFC6052) && (USE_RFC6052 == 1)
 static void map_ipv6_with_ipv4(pj_pool_t *pool, pj_str_t *dst, pj_str_t *src)
 {
-    char tmp[128] = { 0 };
-    pj_sockaddr src_addr;
-    pj_sockaddr dst_addr;
+
+    char prefix[4] = { 0x00, 0x64, 0xff, 0x9b };
+    struct in_addr in_addr;
+    struct in6_addr in6_addr;
     pj_status_t status;
 
     /* Step 1. Map */
@@ -494,38 +513,38 @@ static void map_ipv6_with_ipv4(pj_pool_t *pool, pj_str_t *dst, pj_str_t *src)
         pj_strdup2(pool, dst, "127.0.0.1");
     } else {
 
-        unsigned options = 0;
-        status = pj_sockaddr_parse(PJ_AF_INET6, options, (const pj_str_t *)src, &src_addr);
+        /* Step 1. Parse IPv6 address */
+        status = pj_inet_pton(PJ_AF_INET6, src, &in6_addr);
         if (status != PJ_SUCCESS) {
-            PJ_LOG(1, (THIS_FILE, "Error parse address '%.*s'",
+            PJ_LOG(1, (THIS_FILE, "Error parse address '%.*s' (pj_inet_pton)",
                 (int)src->slen, src->ptr
             ));
             return;
         }
 
-        if (src_addr.addr.sa_family == PJ_AF_INET6) {
-
-            /* Step 1. Initialize result */
-            dst_addr.addr.sa_family = PJ_AF_INET;
-            dst_addr.ipv4.sin_family = PJ_AF_INET;
-            dst_addr.ipv4.sin_port = src_addr.ipv6.sin6_port;
-
-            /* Step 2. Map address with "::/96" subnet */
-            char *ptr = &src_addr.ipv6.sin6_addr;
-            memset(&dst_addr.ipv4.sin_addr, 0, sizeof(dst_addr.ipv4.sin_addr));
-            memcpy(&dst_addr.ipv4.sin_addr, ptr + 12, sizeof(src_addr.ipv4.sin_addr));
-
-            /* Step 3. Print result */
-            unsigned flags = 2;
-            pj_sockaddr_print(&dst_addr, tmp, 128, flags);
-            pj_strdup2(pool, dst, tmp);
-
-        } else {
-            PJ_LOG(4, (THIS_FILE, "AMap IPv6 -> IPv4 address: provide IPv4 address: '%.*s'",
+        /* Step 2. Check IPv6 address use Well Known prefix */
+        if (0 != pj_memcmp(&in6_addr, prefix, sizeof(prefix))) {
+            PJ_LOG(4, (THIS_FILE, "AMap: no NAT64 network address '%.*s'",
                 (int)src->slen, src->ptr
             ));
             return;
         }
+
+        /* Step 3. Map address with "::/96" subnet */
+        memset(&in_addr, 0, sizeof(in_addr));
+        char *ptr = &in6_addr;
+        memcpy(&in_addr, ptr + 12, sizeof(in_addr));
+
+        /* Step 5. Print result */
+        char tmp[PJ_INET_ADDRSTRLEN] = { 0 };
+        status = pj_inet_ntop(PJ_AF_INET, &in_addr, tmp, PJ_INET_ADDRSTRLEN);
+        if (status != PJ_SUCCESS) {
+            PJ_LOG(1, (THIS_FILE, "Error print address '%.*s' (pj_inet_ntop)",
+                (int)src->slen, src->ptr
+            ));
+            return;
+        }
+        pj_strdup2(pool, dst, tmp);
     }
 
     /* Step 2. Debug message */
@@ -542,12 +561,10 @@ static void map_ipv6_with_ipv4(pj_pool_t *pool, pj_str_t *dst, pj_str_t *src)
     /* Step 1. Map */
     if (0 == pj_strcmp2(src, "[::1]")) {
         pj_strdup2(pool, dst, "127.0.0.1");
-    } else if (0 == pj_strcmp(src, &acc_in6_addr)) {
-        pj_strdup(pool, dst, &acc_in4_addr);
-    } else if (0 == pj_strcmp(src, &hpbx_in6_addr)) {
-        pj_strdup(pool, dst, &hpbx_in4_addr);
-    } else {
-        pj_strdup(pool, dst, &hpbx_in4_addr);
+    } else if (0 == pj_strcmp(src, &acc.in6_addr)) {
+        pj_strdup(pool, dst, &acc.in4_addr);
+    } else if (0 == pj_strcmp(src, &hpbx.in6_addr)) {
+        pj_strdup(pool, dst, &hpbx.in4_addr);
     }
 
     /* Step 2. Debug message */
@@ -591,7 +608,7 @@ static void patch_record_route_ipv4_with_ipv6(pjsip_rx_data *rdata)
             pj_str_t map_addr = { .slen = 0, .ptr = 0 };
             map_ipv4_with_ipv6(pool, &map_addr, &sip_uri->host);
             if (map_addr.slen != 0) {
-                PJ_LOG(5, (THIS_FILE, "RX patch1 Record-Route header %.*s -> %.*s",
+                PJ_LOG(4, (THIS_FILE, "RX patch1 Record-Route header %.*s -> %.*s",
                     sip_uri->host.slen, sip_uri->host.ptr,
                     map_addr.slen, map_addr.ptr
                 ));
@@ -610,7 +627,7 @@ static void patch_record_route_ipv4_with_ipv6(pjsip_rx_data *rdata)
             pj_str_t map_addr = { .slen = 0, .ptr = 0 };
             map_ipv4_with_ipv6(pool, &map_addr, &sip_uri->host);
             if (map_addr.slen != 0) {
-                PJ_LOG(5, (THIS_FILE, "RX patch2 Record-Route header %.*s -> %.*s",
+                PJ_LOG(4, (THIS_FILE, "RX patch2 Record-Route header %.*s -> %.*s",
                     sip_uri->host.slen, sip_uri->host.ptr,
                     map_addr.slen, map_addr.ptr
                 ));
@@ -652,7 +669,7 @@ static void patch_record_route_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *m
             pj_str_t map_addr = { .slen = 0, .ptr = 0 };
             map_ipv6_with_ipv4(pool, &map_addr, &sip_uri->host);
             if (map_addr.slen > 0) {
-                PJ_LOG(5, (THIS_FILE, "TX patch1 Record-Route header '%.*s' -> '%.*s'",
+                PJ_LOG(4, (THIS_FILE, "TX patch1 Record-Route header '%.*s' -> '%.*s'",
                     (int)sip_uri->host.slen, sip_uri->host.ptr,
                     (int)map_addr.slen, map_addr.ptr
                 ));
@@ -671,7 +688,7 @@ static void patch_record_route_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *m
             pj_str_t map_addr = { .slen = 0, .ptr = 0 };
             map_ipv6_with_ipv4(pool, &map_addr, &sip_uri->host);
             if (map_addr.slen > 0) {
-                PJ_LOG(5, (THIS_FILE, "TX patch2 Record-Route header '%.*s' -> '%.*s'",
+                PJ_LOG(4, (THIS_FILE, "TX patch2 Record-Route header '%.*s' -> '%.*s'",
                     (int)sip_uri->host.slen, sip_uri->host.ptr,
                     (int)map_addr.slen, map_addr.ptr
                 ));
@@ -690,36 +707,67 @@ static void patch_record_route_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *m
 static void patch_contact_ipv4_with_ipv6(pjsip_rx_data *rdata)
 {
     pj_pool_t *pool = rdata->tp_info.pool;
-    pjsip_contact_hdr *update_contact_hdr = NULL;
+    pjsip_contact_hdr *contact = NULL;
     pjsip_msg *msg = rdata->msg_info.msg;
     pj_str_t addr;
     pjsip_hdr *hdr = (pjsip_hdr *)msg->hdr.next;
     pjsip_hdr *end = &msg->hdr;
+    unsigned patch_count = 0;
 
     /* Step 1. Search */
     for (; hdr != end; hdr = hdr->next) {
         if (hdr->type == PJSIP_H_CONTACT) {
             pjsip_contact_hdr *current_contact_hdr = (pjsip_contact_hdr *)hdr;
-            update_contact_hdr = current_contact_hdr;
+            contact = current_contact_hdr;
         }
     }
 
     /* Step 2. Update */
-    if (update_contact_hdr != NULL) {
-        /* Step 1. Extract server address */
-        pj_strdup2(pool, &addr, rdata->pkt_info.src_name);
+    if (contact == NULL) {
+        PJ_LOG(4, (THIS_FILE, "RX no-patch Contact header"));
+        return;
+    }
 
-        /* Step 2. Replace */
-        pjsip_sip_uri * sip_uri = NULL;
-        sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(update_contact_hdr->uri);
-        PJ_LOG(5, (THIS_FILE, "RX patch Contact header %.*s -> %.*s",
+    /* Step 1. Common R-URI patch base on IP address mapping */
+    if ((patch_count == 0) /* && (msg->type == PJSIP_REQUEST_MSG) */) {
+        /* Step 1. Get actual R-URI address */
+        pjsip_sip_uri *sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(contact->uri);
+        if (sip_uri == NULL) {
+            return;
+        }
+        pj_str_t map_addr = { .slen = 0, .ptr = 0 };
+        /* Step 2. Map IPv6 -> IPv4 address */
+        map_ipv4_with_ipv6(pool, &map_addr, &sip_uri->host);
+        /* Step 3. Mapping routine */
+        if (map_addr.slen > 0) {
+            PJ_LOG(4, (THIS_FILE, "RX patch Contact addr '%.*s':%d -> '%.*s':%d (use mapping)",
+                (int)sip_uri->host.slen, sip_uri->host.ptr, sip_uri->port,
+                (int)map_addr.slen, map_addr.ptr, sip_uri->port
+            ));
+            sip_uri->host.slen = map_addr.slen;
+            sip_uri->host.ptr = map_addr.ptr;
+            /* Update patch count */
+            patch_count += 1;
+        }
+    }
+
+    /* Step 2. R-URI patch base on account address */
+    if (acc.in6_addr.slen > 0) {
+        /* Step 1. Get actual R-URI address */
+        pjsip_sip_uri *sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(contact->uri);
+        if (sip_uri == NULL) {
+            return;
+        }
+        //
+        PJ_LOG(4, (THIS_FILE, "RX patch Contact header %.*s -> %.*s (use account)",
             sip_uri->host.slen, sip_uri->host.ptr,
             addr.slen, addr.ptr
         ));
-        sip_uri->host.slen = addr.slen;
-        sip_uri->host.ptr = addr.ptr;
-    } else {
-        PJ_LOG(5, (THIS_FILE, "RX no-patch Contact header"));
+        sip_uri->host.slen = acc.in6_addr.slen;
+        sip_uri->host.ptr = acc.in6_addr.ptr;
+        if (acc.in6_port > 0) {
+            sip_uri->port = acc.in6_port;
+        }
     }
 
 }
@@ -743,7 +791,7 @@ static void patch_route_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *msg)
             pj_str_t map_addr = { .slen = 0, .ptr = 0 };
             map_ipv6_with_ipv4(pool, &map_addr, &sip_uri->host);
             if (map_addr.slen > 0) {
-                PJ_LOG(5, (THIS_FILE, "TX patch Route header '%.*s' -> '%.*s'",
+                PJ_LOG(4, (THIS_FILE, "TX patch Route header '%.*s' -> '%.*s'",
                     (int)sip_uri->host.slen, sip_uri->host.ptr,
                     (int)map_addr.slen, map_addr.ptr
                 ));
@@ -755,34 +803,175 @@ static void patch_route_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *msg)
 
 }
 
+/**
+ * Check IPv4 and IPv6 network address without port
+ *
+**/
+pj_status_t parse_addr(pj_str_t *addr)
+{
+    pj_sockaddr new_addr;
+    pj_status_t status;
+
+    /* Step 1. Try parse IPv4 address */
+    status = pj_inet_pton(PJ_AF_INET, addr, &new_addr.ipv6.sin6_addr);
+    if (status == PJ_SUCCESS) {
+        return PJ_SUCCESS;
+    }
+
+    /* Step 2. Try parse IPv6 address */
+    status = pj_inet_pton(PJ_AF_INET6, addr, &new_addr.ipv6.sin6_addr);
+    if (status == PJ_SUCCESS) {
+        return PJ_SUCCESS;
+    }
+
+    return PJ_EINVAL;
+}
+
 static void patch_r_uri_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *msg)
 {
     pj_pool_t *pool = tdata->pool;
+    unsigned patch_count = 0;
+    pj_status_t status;
 
-    /* Step 1. Patch R-URI on request */
-    if (msg->type == PJSIP_REQUEST_MSG) {
-        /* Step 1. Get actual R-URI address */
-        pjsip_sip_uri *sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(msg->line.req.uri);
+    /* Step 0. Check request */
+    if (msg->type != PJSIP_REQUEST_MSG) {
+        return;
+    }
+    pjsip_sip_uri *sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(msg->line.req.uri);
+
+    /* Step 1. No process domain name at host */
+    status = parse_addr(&sip_uri->host);
+    if (status != PJ_SUCCESS) {
+        PJ_LOG(4, (THIS_FILE, "TX patch R-URI addr '%.*s' (use FQDN)",
+            (int)sip_uri->host.slen, sip_uri->host.ptr
+        ));
+        return;
+    }
+
+    /* Step 1. Common R-URI patch base on IP address mapping */
+    if (patch_count == 0) {
+        /* Step 1. Map IPv6 -> IPv4 address */
         pj_str_t map_addr = { .slen = 0, .ptr = 0 };
-        /* Step 2. Map IPv6 -> IPv4 address */
         map_ipv6_with_ipv4(pool, &map_addr, &sip_uri->host);
-        /* Step 3. No mapping use server address */
-        if (map_addr.slen == 0) {
-            PJ_LOG(5, (THIS_FILE, "TX patch R-URI addr use server '%.*s' (failback)",
-                (int)hpbx_in4_addr.slen, hpbx_in4_addr.ptr
-            ));
-            map_addr.slen = hpbx_in4_addr.slen;
-            map_addr.ptr = hpbx_in4_addr.ptr;
-        }
-        /* Step 4. Mapping routine */
+        /* Step 2. Mapping routine */
         if (map_addr.slen > 0) {
-            PJ_LOG(5, (THIS_FILE, "TX patch R-URI addr '%.*s' -> '%.*s'",
+            PJ_LOG(4, (THIS_FILE, "TX patch R-URI addr '%.*s' -> '%.*s' (use mapping)",
                 (int)sip_uri->host.slen, sip_uri->host.ptr,
                 (int)map_addr.slen, map_addr.ptr
             ));
             sip_uri->host.slen = map_addr.slen;
             sip_uri->host.ptr = map_addr.ptr;
+            /* Update patch count */
+            patch_count += 1;
         }
+    }
+
+    /* Step 2. Patch R-URI with server IPv4 address */
+    if ( 1 ) {
+        /* Step 1. Replace over server IPv4 address */
+        if (hpbx.in4_addr.slen > 0) {
+            PJ_LOG(4, (THIS_FILE, "TX patch R-URI addr use server '%.*s' (use server addr)",
+                (int)hpbx.in4_addr.slen, hpbx.in4_addr.ptr
+            ));
+            sip_uri->host.slen = hpbx.in4_addr.slen;
+            sip_uri->host.ptr = hpbx.in4_addr.ptr;
+            /* Update patch count */
+            patch_count += 1;
+        }
+    }
+
+    /* Step 3. Patch R-URI with custom IPv4 address */
+    if (patch_count == 0) {
+        /* Step 1. Replace over custom IPv4 address */
+        pj_str_t map_addr = { .slen = 8, .ptr = "10.0.0.1" };
+        PJ_LOG(4, (THIS_FILE, "TX patch R-URI addr '%.*s' -> '%.*s' (use 10.0.0.1)",
+            (int)sip_uri->host.slen, sip_uri->host.ptr,
+            (int)map_addr.slen, map_addr.ptr
+        ));
+        sip_uri->host.ptr = map_addr.ptr;
+        sip_uri->host.slen = map_addr.slen;
+        /* Update patch count */
+        patch_count += 1;
+    }
+
+}
+
+static void patch_contact_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *msg)
+{
+    pj_pool_t *pool = tdata->pool;
+    unsigned patch_count = 0;
+
+    /* Step 1. Search Contact */
+    pjsip_contact_hdr *contact = (pjsip_contact_hdr*)pjsip_msg_find_hdr(msg, PJSIP_H_CONTACT, NULL);
+    if (contact == NULL) {
+        PJ_LOG(1, (THIS_FILE, "No TX patch Contact"));
+        return;
+    }
+
+#if 0
+    /* Step 1. Common R-URI patch base on IP address mapping */
+    if ((patch_count == 0) && (msg->type == PJSIP_REQUEST_MSG)) {
+        /* Step 1. Get actual R-URI address */
+        pjsip_sip_uri *sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(contact->uri);
+        if (sip_uri == NULL) {
+            return;
+        }
+        pj_str_t map_addr = { .slen = 0, .ptr = 0 };
+        /* Step 2. Map IPv6 -> IPv4 address */
+        map_ipv6_with_ipv4(pool, &map_addr, &sip_uri->host);
+        /* Step 3. Mapping routine */
+        if (map_addr.slen > 0) {
+            PJ_LOG(4, (THIS_FILE, "TX patch Contact addr '%.*s':%d -> '%.*s':%d",
+                (int)sip_uri->host.slen, sip_uri->host.ptr, sip_uri->port,
+                (int)map_addr.slen, map_addr.ptr, sip_uri->port
+            ));
+            sip_uri->host.slen = map_addr.slen;
+            sip_uri->host.ptr = map_addr.ptr;
+            /* Update patch count */
+            patch_count += 1;
+        }
+    }
+#endif
+
+    /* Step 2. Patch R-URI on INVITE/ACK/BYE request with server IPv4 address */
+    if (msg->type == PJSIP_REQUEST_MSG) {
+        /* Step 1. Get actual R-URI address */
+        pjsip_sip_uri *sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(contact->uri);
+        if (sip_uri == NULL) {
+            return;
+        }
+        //
+        if (acc.in4_addr.slen > 0) {
+            PJ_LOG(4, (THIS_FILE, "TX patch Contact addr use account '%.*s':%d (update port only on value >0)",
+                (int)acc.in4_addr.slen, acc.in4_addr.ptr, acc.in4_port
+            ));
+            sip_uri->host.slen = acc.in4_addr.slen;
+            sip_uri->host.ptr = acc.in4_addr.ptr;
+            if (acc.in4_port > 0) {
+                sip_uri->port = acc.in4_port;
+            }
+            /* Update patch count */
+            patch_count += 1;
+        }
+    }
+
+    /* Step 3. Patch R-URI with network IPv4 address */
+    if (patch_count == 0) {
+        /* Step 1. Get actual R-URI address */
+        pjsip_sip_uri *sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(contact->uri);
+        if (sip_uri == NULL) {
+            return;
+        }
+        //
+        pj_str_t map_addr = { .slen = 8, .ptr = "10.0.0.1" };
+        PJ_LOG(4, (THIS_FILE, "TX patch Contact addr '%.*s' -> '%.*s' (failback)",
+            (int)sip_uri->host.slen, sip_uri->host.ptr,
+            (int)map_addr.slen, map_addr.ptr
+        ));
+        sip_uri->host.ptr = map_addr.ptr;
+        sip_uri->host.slen = map_addr.slen;
+        /* Update patch count */
+        patch_count += 1;
     }
 
 }
@@ -816,7 +1005,8 @@ static void search_ipv4_client_address(pjsip_rx_data *rdata)
     }
     if (cur_via_hdr != NULL) {
         pj_str_t addr = cur_via_hdr->recvd_param;
-        pj_nat64_set_client_addr(&addr);
+        int port = cur_via_hdr->rport_param;
+        pj_nat64_set_client_addr(&addr, port);
     }
 
 }
@@ -844,7 +1034,7 @@ static void search_ipv4_server_address(pjsip_rx_data *rdata)
         if (sip_uri == NULL) {
             return;
         }
-        pj_nat64_set_server_addr(&sip_uri->host);
+        pj_nat64_set_server_addr(&sip_uri->host, -1);
     }
 
     /* Step 2. Process INVITE response */
@@ -861,7 +1051,7 @@ static void search_ipv4_server_address(pjsip_rx_data *rdata)
         if (sip_uri == NULL) {
             return;
         }
-        pj_nat64_set_server_addr(&sip_uri->host);
+        pj_nat64_set_server_addr(&sip_uri->host, -1);
     }
 
 }
@@ -885,7 +1075,7 @@ static void search_ipv6_server_address(pjsip_rx_data *rdata)
     pj_str_t addr;
     pj_cstr(&addr, rdata->pkt_info.src_name);
     // TODO - check IPv6 address...
-    pj_nat64_set_server_addr6(&addr);
+    pj_nat64_set_server_addr6(&addr, -1);
 }
 
 /**
@@ -912,11 +1102,11 @@ static pj_bool_t ipv6_mod_on_rx(pjsip_rx_data *rdata)
 
     /* Step 0. Check enable module */
     if (!mod_enable) {
-        PJ_LOG(5, (THIS_FILE, "NAT64 module was disable."));
+        PJ_LOG(4, (THIS_FILE, "NAT64 module was disable."));
         return PJ_FALSE;
     }
     if (!is_ipv6(rdata->tp_info.transport)) {
-        PJ_LOG(5, (THIS_FILE, "Use non IPv6 transport. NAT64 module was disable."));
+        PJ_LOG(4, (THIS_FILE, "Use non IPv6 transport. NAT64 module was disable."));
         return PJ_FALSE;
     }
 
@@ -925,20 +1115,20 @@ static pj_bool_t ipv6_mod_on_rx(pjsip_rx_data *rdata)
     modern_sip_msg_dump("RX source SIP message", rdata->msg_info.msg);
 
     /* Step 2. Peek HPBX server address */
-    PJ_LOG(5, (THIS_FILE, "RX search HPBX server addr"));
+    PJ_LOG(4, (THIS_FILE, "RX search HPBX server addr"));
     search_ipv4_client_address(rdata);
     search_ipv6_client_address(rdata);
     search_ipv4_server_address(rdata);
     search_ipv6_server_address(rdata);
 
     /* Step 2. Patch SIP message headers */
-    PJ_LOG(5, (THIS_FILE, "RX patch SIP message headers: IPv4 -> IPv6"));
+    PJ_LOG(4, (THIS_FILE, "RX patch SIP message headers: IPv4 -> IPv6"));
     patch_record_route_ipv4_with_ipv6(rdata);
     patch_contact_ipv4_with_ipv6(rdata);
 
     /* Step 3. Replace SDP body of SIP message */
     if ((cseq != NULL) && (cseq->method.id == PJSIP_INVITE_METHOD)) {
-        PJ_LOG(5, (THIS_FILE, "RX patch SDP on INVITE: IPv4 -> IPv6"));
+        PJ_LOG(4, (THIS_FILE, "RX patch SDP on INVITE: IPv4 -> IPv6"));
         patch_sdp_ipv4_with_ipv6(rdata);
     }
 
@@ -964,11 +1154,11 @@ pj_status_t ipv6_mod_on_tx(pjsip_tx_data *tdata)
 
     /* Step 0. Check enable module */
     if (!mod_enable) {
-        PJ_LOG(5, (THIS_FILE, "NAT64 module was disable."));
+        PJ_LOG(4, (THIS_FILE, "NAT64 module was disable."));
         return PJ_SUCCESS;
     }
     if (!is_ipv6(tdata->tp_info.transport)) {
-        PJ_LOG(5, (THIS_FILE, "NAT64 processing IPv4 module was disable."));
+        PJ_LOG(4, (THIS_FILE, "NAT64 processing IPv4 module was disable."));
         return PJ_SUCCESS;
     }
 
@@ -977,14 +1167,15 @@ pj_status_t ipv6_mod_on_tx(pjsip_tx_data *tdata)
     modern_sip_msg_dump("TX source SIP message", msg);
 
     /* Step 2. Patch SIP message headers */
-    PJ_LOG(5, (THIS_FILE, "TX patch SIP message headers: IPv6 -> IPv4"));
+    PJ_LOG(4, (THIS_FILE, "TX patch SIP message headers: IPv6 -> IPv4"));
     patch_record_route_ipv6_with_ipv4(tdata, msg);
     patch_route_ipv6_with_ipv4(tdata, msg);
     patch_r_uri_ipv6_with_ipv4(tdata, msg);
+    patch_contact_ipv6_with_ipv4(tdata, msg);
 
     /* Step 3. Replace SDP body of SIP message */
     if ((cseq != NULL) && (cseq->method.id == PJSIP_INVITE_METHOD)) {
-        PJ_LOG(5, (THIS_FILE, "TX patch SDP on INVITE: IPv6 -> IPv4"));
+        PJ_LOG(4, (THIS_FILE, "TX patch SDP on INVITE: IPv6 -> IPv4"));
         patch_sdp_ipv6_with_ipv4(tdata, msg);
     }
 
@@ -1014,40 +1205,6 @@ static pjsip_module ipv6_module = {
     NULL,                             /* on_tsx_state()   */
 };
 
-static void check_network()
-{
-    pj_status_t status;
-    pj_sockaddr dst_addr = { 0 };
-    pj_sockaddr src_addr = { 0 };
-
-    /* Step 1. Get Well Know IPv4 network address, example: 8.8.8.8 */
-    unsigned options = 0;
-    pj_str_t src = { .slen = 7, .ptr = "8.8.8.8" };
-    status = pj_sockaddr_parse(PJ_AF_INET, options, &src, &src_addr);
-    if (status != PJ_SUCCESS) {
-        PJ_LOG(4, (THIS_FILE, "Network address synthesize: error parse IPv4 address"));
-        return;
-    }
-
-    /* Step 2. Create IPv6 addres */
-    status = pj_sockaddr_synthesize(PJ_AF_INET6, &dst_addr, &src_addr);
-    if (status != PJ_SUCCESS) {
-        PJ_LOG(4, (THIS_FILE, "Network address synthesize: error synthesize"));
-        return;
-    }
-
-    /* Step 3. Debug convert address */
-    char buf[128] = { 0 };
-    pj_sockaddr_print(&dst_addr, buf, 128, 1 | 2);
-    pj_str_t dst = { .slen = 0, .ptr = buf };
-    dst.slen = strlen(dst.ptr);
-    PJ_LOG(4, (THIS_FILE, "Network address synthesize: covert IPv4 -> IPv6: %.*s -> %.*s",
-        (int)src.slen, src.ptr,
-        (int)dst.slen, dst.ptr
-    ));
-
-}
-
 pj_status_t pj_nat64_enable_rewrite_module()
 {
     pjsip_endpoint *endpt = pjsua_get_pjsip_endpt();
@@ -1059,23 +1216,27 @@ pj_status_t pj_nat64_enable_rewrite_module()
     /* Step 1. Create module memory home */
     if (mod_pool == NULL) {
 #ifdef MOD_IPV6_ENDPT_MEMORY
-        PJ_LOG(5, (THIS_FILE, "Create memory home on endpoint"));
+        PJ_LOG(4, (THIS_FILE, "Create memory home on endpoint"));
         /* Step 1. Create module memory home */
         mod_pool = pjsip_endpt_create_pool(endpt, "ipv6", 512, 512);
 #else
-        PJ_LOG(5, (THIS_FILE, "Create memory home on caching pool"));
+        PJ_LOG(4, (THIS_FILE, "Create memory home on caching pool"));
         /* Step 1. Create module memory home */
         pj_caching_pool_init( &cp, &pj_pool_factory_default_policy, 0);
         mod_pool = pj_pool_create(&cp.factory, "ipv6", 512, 512, NULL);
 #endif
-        /* Step 2. Set random HPBX server address */
+        /* Step 2. Set random account address */
+        addr_init(&hpbx);
+        addr_init(&acc);
+
+        /* Step 3. Set random account address */
         pj_str_t addr = { .ptr = "10.0.0.1", .slen = 8 };
-        pj_nat64_set_client_addr(&addr);
+        pj_nat64_set_client_addr(&addr, -1);
     }
+
     /* Step 2. Register module */
     result = pjsip_endpt_register_module(endpt, &ipv6_module);
-    /* Step 3. Try detect IPv6 subnet */
-    check_network();
+
     return result;
 }
 
@@ -1088,10 +1249,10 @@ pj_status_t pj_nat64_disable_rewrite_module()
     /* Step 2. Release memory home */
     if (mod_pool != NULL) {
 #ifdef MOD_IPV6_ENDPT_MEMORY
-        PJ_LOG(5, (THIS_FILE, "Release memory home on endpoint"));
+        PJ_LOG(4, (THIS_FILE, "Release memory home on endpoint"));
         pjsip_endpt_release_pool(endpt, mod_pool);
 #else
-        PJ_LOG(5, (THIS_FILE, "Release memory home on caching pool"));
+        PJ_LOG(4, (THIS_FILE, "Release memory home on caching pool"));
         pj_pool_release(mod_pool);
 #endif
         mod_pool = NULL;
@@ -1108,23 +1269,21 @@ void pj_nat64_set_enable(pj_bool_t yesno)
     mod_enable = yesno;
 }
 
+/**
+ * Dump address
+ *
+**/
 void pj_nat64_dump()
 {
-    PJ_LOG(5, (THIS_FILE, "NAT64 HPBX [ IN4 = '%.*s' IN6 = '%.*s' ]",
-        hpbx_in4_addr.slen, hpbx_in4_addr.ptr,
-        hpbx_in6_addr.slen, hpbx_in6_addr.ptr
-    ));
-    PJ_LOG(5, (THIS_FILE, "NAT64 UA [ IN4 = '%.*s' IN6 = '%.*s' ]",
-        acc_in4_addr.slen, acc_in4_addr.ptr,
-        acc_in6_addr.slen, acc_in6_addr.ptr
-    ));
+    addr_dump("HPBX", &hpbx);
+    addr_dump("ACC", &acc);
 }
 
 /**
  * Set HPBX server IPv4 address
  *
 **/
-void pj_nat64_set_server_addr(pj_str_t *addr)
+void pj_nat64_set_server_addr(pj_str_t *addr, int port)
 {
     if (mod_pool == NULL) {
         PJ_LOG(1, (THIS_FILE, "No module memory pool"));
@@ -1138,22 +1297,22 @@ void pj_nat64_set_server_addr(pj_str_t *addr)
         return;
     }
     /* Step 2. Check change exists */
-    if (0 == pj_strcmp(&hpbx_in4_addr, addr)) {
+    if (0 == pj_strcmp(&hpbx.in4_addr, addr)) {
         return;
     }
     /* Step 3. Debug message */
-    PJ_LOG(5, (THIS_FILE, "NAT64 update HPBX IN4 address '%.*s' -> '%.*s'",
-        hpbx_in4_addr.slen, hpbx_in4_addr.ptr,
-        addr->slen, addr->ptr
+    PJ_LOG(4, (THIS_FILE, "NAT64 update HPBX IN4 address '%.*s':%d -> '%.*s':%d",
+        hpbx.in4_addr.slen, hpbx.in4_addr.ptr, hpbx.in4_port,
+        addr->slen, addr->ptr, port
     ));
     /* Step 4. Update HPBX server addr value */
-    pj_strdup_with_null(mod_pool, &hpbx_in4_addr, addr);
-
+    pj_strdup_with_null(mod_pool, &hpbx.in4_addr, addr);
+    hpbx.in4_port = port;
     /* Step 5. Dump maps */
     pj_nat64_dump();
 }
 
-void pj_nat64_set_server_addr6(pj_str_t *addr)
+void pj_nat64_set_server_addr6(pj_str_t *addr, int port)
 {
     if (mod_pool == NULL) {
         PJ_LOG(1, (THIS_FILE, "No module memory pool"));
@@ -1167,22 +1326,22 @@ void pj_nat64_set_server_addr6(pj_str_t *addr)
         return;
     }
     /* Step 2. Check change exists */
-    if (0 == pj_strcmp(&hpbx_in6_addr, addr)) {
+    if (0 == pj_strcmp(&hpbx.in6_addr, addr)) {
         return;
     }
     /* Step 3. Debug message */
-    PJ_LOG(5, (THIS_FILE, "NAT64 update HPBX IN6 address '%.*s' -> '%.*s'",
-        hpbx_in6_addr.slen, hpbx_in6_addr.ptr,
-        addr->slen, addr->ptr
+    PJ_LOG(4, (THIS_FILE, "NAT64 update HPBX IN6 address '%.*s':%d -> '%.*s':%d",
+        hpbx.in6_addr.slen, hpbx.in6_addr.ptr, hpbx.in6_port,
+        addr->slen, addr->ptr, port
     ));
     /* Step 4. Update HPBX server addr value */
-    pj_strdup_with_null(mod_pool, &hpbx_in6_addr, addr);
+    pj_strdup_with_null(mod_pool, &hpbx.in6_addr, addr);
 
     /* Step 5. Dump maps */
     pj_nat64_dump();
 }
 
-void pj_nat64_set_client_addr(pj_str_t *addr)
+void pj_nat64_set_client_addr(pj_str_t *addr, int port)
 {
     if (mod_pool == NULL) {
         PJ_LOG(1, (THIS_FILE, "No module memory pool"));
@@ -1196,21 +1355,22 @@ void pj_nat64_set_client_addr(pj_str_t *addr)
         return;
     }
     /* Step 2. Check change exists */
-    if (0 == pj_strcmp(&acc_in4_addr, addr)) {
+    if (0 == pj_strcmp(&acc.in4_addr, addr)) {
         return;
     }
     /* Step 3. Debug message */
-    PJ_LOG(5, (THIS_FILE, "NAT64 update ACC IN4 address '%.*s' -> '%.*s'",
-        acc_in4_addr.slen, acc_in4_addr.ptr,
-        addr->slen, addr->ptr
+    PJ_LOG(4, (THIS_FILE, "NAT64 update ACC IN4 address '%.*s':%d -> '%.*s':%d",
+        acc.in4_addr.slen, acc.in4_addr.ptr, acc.in4_port,
+        addr->slen, addr->ptr, port
     ));
     /* Step 4. Update HPBX server addr value */
-    pj_strdup_with_null(mod_pool, &acc_in4_addr, addr);
+    pj_strdup_with_null(mod_pool, &acc.in4_addr, addr);
+    acc.in4_port = port;
     /* Step 5. Dump maps */
     pj_nat64_dump();
 }
 
-void pj_nat64_set_client_addr6(pj_str_t *addr)
+void pj_nat64_set_client_addr6(pj_str_t *addr, int port)
 {
     if (mod_pool == NULL) {
         PJ_LOG(1, (THIS_FILE, "No module memory pool"));
@@ -1224,16 +1384,17 @@ void pj_nat64_set_client_addr6(pj_str_t *addr)
         return;
     }
     /* Step 2. Check change exists */
-    if (0 == pj_strcmp(&acc_in6_addr, addr)) {
+    if (0 == pj_strcmp(&acc.in6_addr, addr)) {
         return;
     }
     /* Step 3. Debug message */
-    PJ_LOG(5, (THIS_FILE, "NAT64 update ACC IN6 address '%.*s' -> '%.*s'",
-        acc_in6_addr.slen, acc_in6_addr.ptr,
-        addr->slen, addr->ptr
+    PJ_LOG(4, (THIS_FILE, "NAT64 update ACC IN6 address '%.*s':%d -> '%.*s':%d",
+        acc.in6_addr.slen, acc.in6_addr.ptr, acc.in6_port,
+        addr->slen, addr->ptr, port
     ));
     /* Step 4. Update HPBX server addr value */
-    pj_strdup_with_null(mod_pool, &acc_in6_addr, addr);
+    pj_strdup_with_null(mod_pool, &acc.in6_addr, addr);
+    acc.in6_port = port;
     /* Step 5. Dump maps */
     pj_nat64_dump();
 }

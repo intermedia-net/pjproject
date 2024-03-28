@@ -25,25 +25,25 @@ void pj_nat64_set_enable(pj_bool_t yesno);
  * Set HPBX server IPv4 address
  *
 **/
-void pj_nat64_set_server_addr(pj_str_t *addr);
+void pj_nat64_set_server_addr(pj_str_t *addr, int port);
 
 /**
  * Set HPBX server IPv6 address
  *
 **/
-void pj_nat64_set_server_addr6(pj_str_t *addr);
+void pj_nat64_set_server_addr6(pj_str_t *addr, int port);
 
 /**
  * Set account IPv4 address
  *
 **/
-void pj_nat64_set_client_addr(pj_str_t *addr);
+void pj_nat64_set_client_addr(pj_str_t *addr, int port);
 
 /**
  * Set account IPv6 address
  *
 **/
-void pj_nat64_set_client_addr6(pj_str_t *addr);
+void pj_nat64_set_client_addr6(pj_str_t *addr, int port);
 
 /** Dump maps
  *
