@@ -31,7 +31,7 @@ export _CFLAGS 	:= $(CC_CFLAGS) $(OS_CFLAGS) $(HOST_CFLAGS) $(M_CFLAGS) \
 export _CXXFLAGS:= $(_CFLAGS) $(CC_CXXFLAGS) $(OS_CXXFLAGS) $(M_CXXFLAGS) \
 		   $(HOST_CXXFLAGS) $(CXXFLAGS)
 export _LDFLAGS := $(CC_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) $(HOST_LDFLAGS) \
-		   $(APP_LDFLAGS) $(LDFLAGS)
+		   $(APP_LDFLAGS) $(LDFLAGS) 
 
 ###############################################################################
 # Defines for building PJNATH library
@@ -84,7 +84,7 @@ export PJTURN_SRV_EXE:=pjturn-srv-$(TARGET_NAME)$(HOST_EXE)
 endif
 	
 	
-export CC_OUT CC AR RANLIB HOST_MV HOST_RM HOST_RMDIR HOST_MKDIR OBJEXT LD LDOUT
+export CC_OUT CC AR RANLIB HOST_MV HOST_RM HOST_RMDIR HOST_MKDIR OBJEXT LD LDOUT 
 ###############################################################################
 # Main entry
 TARGETS := $(PJNATH_LIB) $(PJNATH_SONAME)
@@ -99,7 +99,7 @@ doc:
 	@if [ -n "$(WWWDIR)" ] && ! [ -d "$(WWWDIR)/docs/$(PJ_VERSION)/pjnath/docs/html" ] ; then \
 		echo "Creating docs/$(PJ_VERSION)/pjnath/docs/html" ; \
 		mkdir -p $(WWWDIR)/docs/$(PJ_VERSION)/pjnath/docs/html ; \
-	fi
+	fi 
 	@if [ -n "$(WWWDIR)" ] && [ -d "$(WWWDIR)/docs/$(PJ_VERSION)/pjnath/docs/html" ] ; then \
 		echo "Copying docs/$(PJ_VERSION) to $(WWWDIR)/docs/$(PJ_VERSION)/pjnath/docs/html.." ; \
 		cp -v -a ../docs/$(PJ_VERSION)/html/* $(WWWDIR)/docs/$(PJ_VERSION)/pjnath/docs/html/ ; \
@@ -163,4 +163,5 @@ depend:
 	echo '$(BINDIR)/$(PJNATH_TEST_EXE): $(LIBDIR)/$(PJNATH_LIB) $(PJLIB_UTIL_LIB) $(PJLIB_LIB)' >> .pjnath-test-$(TARGET_NAME).depend
 	echo '$(BINDIR)/$(PJTURN_CLIENT_EXE): $(LIBDIR)/$(PJNATH_LIB) $(PJLIB_UTIL_LIB) $(PJLIB_LIB)' >> .pjturn-client-$(TARGET_NAME).depend
 	echo '$(BINDIR)/$(PJTURN_SRV_EXE): $(LIBDIR)/$(PJNATH_LIB) $(PJLIB_UTIL_LIB) $(PJLIB_LIB)' >> .pjturn-srv-$(TARGET_NAME).depend
+
 
