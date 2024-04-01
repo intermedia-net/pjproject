@@ -10,8 +10,6 @@
 
 #define THIS_FILE "pj-nat64.c"
 
-#define MODULE_VERSION "$Id: bcee8cba5968c6869380ef1862bfd1e5039c552e $"
-
 /**
  * Use algorithmic map
  *
@@ -933,7 +931,7 @@ static void patch_contact_ipv6_with_ipv4(pjsip_tx_data *tdata, pjsip_msg *msg)
     }
 #endif
 
-    /* Step 2. Patch R-URI on INVITE/ACK/BYE request with server IPv4 address */
+    /* Step 2. Patch R-URI on request with server IPv4 address */
     if (msg->type == PJSIP_REQUEST_MSG) {
         /* Step 1. Get actual R-URI address */
         pjsip_sip_uri *sip_uri = (pjsip_sip_uri *)pjsip_uri_get_uri(contact->uri);
@@ -1209,9 +1207,6 @@ pj_status_t pj_nat64_enable_rewrite_module()
 {
     pjsip_endpoint *endpt = pjsua_get_pjsip_endpt();
     pj_status_t result;
-
-    /* Step 0. Show module version */
-    PJ_LOG(4, (THIS_FILE, "Register NAT64 module version %s", MODULE_VERSION));
 
     /* Step 1. Create module memory home */
     if (mod_pool == NULL) {
