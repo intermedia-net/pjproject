@@ -43,6 +43,10 @@ jobs:
 
       - name: Push changes
         if: ${{ success() }}
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: master
+          fetch-depth: 0
         run: git push origin master
 
       - name: Success step
