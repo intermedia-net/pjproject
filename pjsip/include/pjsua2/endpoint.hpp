@@ -1790,7 +1790,6 @@ public:
      */
     void resetVideoCodecParam(const string &codec_id) PJSUA2_THROW(Error);
 
-#if defined(PJMEDIA_HAS_OPUS_CODEC) && (PJMEDIA_HAS_OPUS_CODEC!=0)
     /**
      * Get codec Opus config.
      *
@@ -1805,7 +1804,6 @@ public:
      */
     void setCodecOpusConfig(const CodecOpusConfig &opus_cfg)
                             PJSUA2_THROW(Error);
-#endif
 
     /**
      * Enumerate all SRTP crypto-suite names.
