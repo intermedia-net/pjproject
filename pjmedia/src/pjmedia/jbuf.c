@@ -749,7 +749,7 @@ PJ_DEF(pj_status_t) pjmedia_jbuf_reset(pjmedia_jbuf *jb)
 
 PJ_DEF(pj_status_t) pjmedia_jbuf_destroy(pjmedia_jbuf *jb)
 {
-    PJ_LOG(5, (jb->jb_name.ptr, ""
+    PJ_LOG(3, (jb->jb_name.ptr, ""
                "JB summary:\n"
                "  size=%d/eff=%d prefetch=%d level=%d\n"
                "  delay (min/max/avg/dev)=%d/%d/%d/%d ms\n"
