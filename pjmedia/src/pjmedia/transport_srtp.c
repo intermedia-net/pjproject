@@ -1664,7 +1664,8 @@ static void srtp_rtp_cb(pjmedia_tp_cb_param *param)
 #endif
 
 #if PJMEDIA_SRTP_CHECK_ROC_ON_RESTART
-    if (srtp->probation_cnt > 0 && err == srtp_err_status_auth_fail &&
+    if (srtp->probation_cnt > 0 && 
+        (err == srtp_err_status_auth_fail || err == srtp_err_status_no_ctx) &&
         srtp->setting.prev_rx_roc.ssrc != 0 &&
         srtp->setting.prev_rx_roc.ssrc == srtp->setting.rx_roc.ssrc &&
         srtp->setting.prev_rx_roc.roc != srtp->setting.rx_roc.roc)
@@ -1690,8 +1691,9 @@ static void srtp_rtp_cb(pjmedia_tp_cb_param *param)
 
     if (err != srtp_err_status_ok) {
         PJ_LOG(2,(srtp->pool->obj_name,
-                  "Failed to unprotect SRTP, pkt size=%ld, err=%s",
-                  size, get_libsrtp_errstr(err)));
+                  "Failed to unprotect SRTP, pkt size=%ld, err=%s ssrc=%d",
+                  size, get_libsrtp_errstr(err),
+                  ntohl(((pjmedia_rtp_hdr*)pkt)->ssrc)));
     } else {
         cb = srtp->rtp_cb;
         cb2 = srtp->rtp_cb2;
