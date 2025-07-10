@@ -31,6 +31,15 @@
 
 #if defined(PJMEDIA_HAS_SRTP) && (PJMEDIA_HAS_SRTP != 0)
 
+/* Currently SRTP-DTLS requires OpenSSL */
+#if PJMEDIA_SRTP_HAS_DTLS
+#  if PJ_SSL_SOCK_IMP != PJ_SSL_SOCK_IMP_OPENSSL
+#    pragma message("DTLS requires OpenSSL, disabling it...")
+#    undef PJMEDIA_SRTP_HAS_DTLS
+#    define PJMEDIA_SRTP_HAS_DTLS 0
+#  endif
+#endif
+
 /* Enable this to test ROC initialization setting. For offerer,
  * it will send packets with ROC 1 and expect to receive ROC 2.
  * For answerer it will be the other way around.
@@ -1697,14 +1706,8 @@ static void srtp_rtp_cb(pjmedia_tp_cb_param *param)
             err = srtp_unprotect(srtp->srtp_ctx.srtp_rx_ctx,
                                  (pj_uint8_t*)pkt, &len);
         }
-    }
-#if PJMEDIA_SRTP_CHECK_ROC_ON_RESTART
-    else
-#endif
-#endif
 
-#if PJMEDIA_SRTP_CHECK_ROC_ON_RESTART
-    if (srtp->probation_cnt > 0 && 
+    } else if (srtp->probation_cnt > 0 && 
         (err == srtp_err_status_auth_fail || err == srtp_err_status_no_ctx) &&
         srtp->setting.prev_rx_roc.ssrc != 0 &&
         srtp->setting.prev_rx_roc.ssrc == srtp->setting.rx_roc.ssrc &&
@@ -1727,7 +1730,6 @@ static void srtp_rtp_cb(pjmedia_tp_cb_param *param)
                                  &len);
         }
     }
-#endif
 
     if (err != srtp_err_status_ok) {
         PJ_LOG(2,(srtp->pool->obj_name,
