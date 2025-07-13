@@ -96,6 +96,10 @@ pj_status_t pjsua_media_subsys_init(const pjsua_media_config *cfg)
         pjsua_var.media_cfg.max_media_ports = pjsua_var.ua_cfg.max_calls + 2;
     }
 
+    if (pjsua_var.media_cfg.conf_threads < 1) {
+        pjsua_var.media_cfg.conf_threads = 1;
+    }
+
     /* Create media endpoint. */
     status = pjmedia_endpt_create(&pjsua_var.cp.factory, 
                                   pjsua_var.media_cfg.has_ioqueue? NULL :
@@ -3711,10 +3715,10 @@ static void check_srtp_roc(pjsua_call *call,
     }
     
 #if 0
-    PJ_LOG(4, (THIS_FILE, "SRTP TX ROC %d %d",
+    PJ_LOG(4, (THIS_FILE, "SRTP TX ROC %u %d",
                           call_med->prev_srtp_info.tx_roc.ssrc,
                           call_med->prev_srtp_info.tx_roc.roc));
-    PJ_LOG(4, (THIS_FILE, "SRTP RX ROC %d %d",
+    PJ_LOG(4, (THIS_FILE, "SRTP RX ROC %u %d",
                           call_med->prev_srtp_info.rx_roc.ssrc,
                           call_med->prev_srtp_info.rx_roc.roc));
 #endif
