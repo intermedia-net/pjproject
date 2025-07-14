@@ -7,4 +7,5 @@
 #define PJSUA_DETECT_MERGED_REQUESTS 0
 #define PJ_QOS_IMPLEMENTATION PJ_QOS_BSD
 #define PJSIP_TRANSPORT_IDLE_TIME 1
+#define PJMEDIA_HAS_RTCP_XR 1
 #include <pj/config_site_sample.h>
