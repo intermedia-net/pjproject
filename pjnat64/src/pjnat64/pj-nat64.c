@@ -102,7 +102,7 @@ static void patch_sdp_attr(pj_pool_t *pool, pjmedia_sdp_media *media, pjmedia_sd
 
     PJ_LOG(4, (THIS_FILE, "Process SDP attribute %.*s", attr->name.slen, attr->name.ptr));
 
-    if (strncmp(attr->name.ptr, rtcp_name.ptr, rtcp_name.slen) == 0) {
+    if (pj_strcmp(&attr->name, &rtcp_name) == 0) {
         s2 = pjmedia_sdp_attr_get_rtcp(attr, &ra);
         if (s2 != PJ_SUCCESS) {
             PJ_LOG(1, (THIS_FILE, "Error: Patch SDP attribute 'rtcp'"));
