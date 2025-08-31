@@ -73,6 +73,8 @@ typedef struct pjmedia_conf pjmedia_conf;
 typedef struct pjmedia_conf_port_info
 {
     unsigned            slot;               /**< Slot number.               */
+    pjmedia_dir         dir;                /**< Port direction.            */
+    pjmedia_obj_sig     signature;          /**< Port signature.            */
     pj_str_t            name;               /**< Port name.                 */
     pjmedia_format      format;             /**< Format.                    */
     pjmedia_port_op     tx_setting;         /**< Transmit settings.         */
@@ -402,7 +404,7 @@ PJ_DECL(pj_status_t) pjmedia_conf_create( pj_pool_t *pool,
  * @return                  PJ_SUCCESS if conference bridge can be created.
  */
 PJ_DECL(pj_status_t) pjmedia_conf_create2(pj_pool_t *pool,
-                                          pjmedia_conf_param *param,
+                                          const pjmedia_conf_param *param,
                                           pjmedia_conf **p_conf);
 
 
