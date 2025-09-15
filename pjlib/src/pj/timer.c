@@ -368,7 +368,7 @@ static pj_timer_entry_dup * remove_node( pj_timer_heap_t *ht, size_t slot)
 static pj_status_t grow_heap(pj_timer_heap_t *ht)
 {
     // All the containers will double in size from max_size_
-    size_t new_size = ht->max_size * 2;
+    pj_size_t new_size = ht->max_size * 2;
 #if PJ_TIMER_USE_COPY
     pj_timer_entry_dup *new_timer_dups = 0;
 #endif
@@ -381,19 +381,21 @@ static pj_status_t grow_heap(pj_timer_heap_t *ht)
     pj_timer_entry_dup *new_dup;
 #endif
 
-    PJ_LOG(6,(THIS_FILE, "Growing heap size from %d to %d",
-                         ht->max_size, new_size));
+    PJ_LOG(6,(THIS_FILE, "Growing heap size from %lu to %lu",
+                         (unsigned long)ht->max_size,
+                         (unsigned long)new_size));
 
     // First grow the heap itself.
-    new_heap = (pj_timer_entry_dup**) 
-               pj_pool_calloc(ht->pool, new_size, sizeof(pj_timer_entry_dup*));
+    new_heap = (pj_timer_entry_dup**)
+               pj_pool_calloc(ht->pool, (unsigned)new_size,
+                              sizeof(pj_timer_entry_dup*));
     if (!new_heap)
         return PJ_ENOMEM;
 
 #if PJ_TIMER_USE_COPY
     // Grow the array of timer copies.
 
-    new_timer_dups = (pj_timer_entry_dup*) 
+    new_timer_dups = (pj_timer_entry_dup*)
                      pj_pool_alloc(ht->pool,
                                    sizeof(pj_timer_entry_dup) * new_size);
     if (!new_timer_dups)
@@ -533,11 +535,14 @@ static int cancel( pj_timer_heap_t *ht,
 
     PJ_CHECK_STACK();
 
-    // Check to see if the timer_id is out of range
+    // Check to see if the timer_id is out of range.
+    // Moved to cancel_timer() as it needs to validate _timer_id earlier
+    /*
     if (entry->_timer_id < 1 || (pj_size_t)entry->_timer_id >= ht->max_size) {
         entry->_timer_id = -1;
         return 0;
     }
+    */
 
     timer_node_slot = ht->timer_ids[entry->_timer_id];
 
@@ -612,7 +617,8 @@ PJ_DEF(pj_status_t) pj_timer_heap_create( pj_pool_t *pool,
 
     // Create the heap array.
     ht->heap = (pj_timer_entry_dup**)
-               pj_pool_calloc(pool, size, sizeof(pj_timer_entry_dup*));
+               pj_pool_calloc(pool, (unsigned)size,
+                              sizeof(pj_timer_entry_dup*));
     if (!ht->heap)
         return PJ_ENOMEM;
 
@@ -810,6 +816,13 @@ static int cancel_timer(pj_timer_heap_t *ht,
     PJ_ASSERT_RETURN(ht && entry, PJ_EINVAL);
 
     lock_timer_heap(ht);
+
+    // Check to see if the timer_id is out of range
+    if (entry->_timer_id < 1 || (pj_size_t)entry->_timer_id >= ht->max_size) {
+        unlock_timer_heap(ht);
+        return 0;
+    }
+
     timer_copy = GET_TIMER(ht, entry);
     grp_lock = timer_copy->_grp_lock;
 

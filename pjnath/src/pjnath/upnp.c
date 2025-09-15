@@ -48,7 +48,7 @@
 /* UPnP device descriptions. */
 static const char* UPNP_ROOT_DEVICE = "upnp:rootdevice";
 static const char* UPNP_IGD_DEVICE =
-    "urn:schemas-upnp-org:device:InternetGatewayDevice:1";
+    "urn:schemas-upnp-org:device:InternetGatewayDevice";
 static const char* UPNP_WANIP_SERVICE =
     "urn:schemas-upnp-org:service:WANIPConnection:1";
 static const char* UPNP_WANPPP_SERVICE =
@@ -215,7 +215,9 @@ static void download_igd_xml(unsigned dev_idx)
     /* Check device type. */
     dev_type = doc_get_elmt_value(doc, "deviceType");
     if (!dev_type) return;
-    if (pj_ansi_strcmp(dev_type, UPNP_IGD_DEVICE) != 0) {
+    if (pj_ansi_strncmp(dev_type, UPNP_IGD_DEVICE,
+                        pj_ansi_strlen(UPNP_IGD_DEVICE)) != 0)
+    {
         /* Device type is not IGD. */
         goto on_error;
     }
@@ -325,12 +327,14 @@ static void add_device(const char *dev_id, const char *url)
 {
     unsigned i;
 
+    pj_mutex_lock(upnp_mgr.mutex);
+
     if (upnp_mgr.igd_cnt >= MAX_DEVS) {
+        pj_mutex_unlock(upnp_mgr.mutex);
         PJ_LOG(3, (THIS_FILE, "Warning: Too many UPnP devices discovered"));
         return;
     }
 
-    pj_mutex_lock(upnp_mgr.mutex);
     for (i = 0; i < upnp_mgr.igd_cnt; i++) {
         if (!pj_strcmp2(&upnp_mgr.igd_devs[i].dev_id, dev_id) &&
             !pj_strcmp2(&upnp_mgr.igd_devs[i].url, url))
@@ -358,6 +362,8 @@ static void set_device_online(const char *dev_id)
 {
     unsigned i;
 
+    pj_mutex_lock(upnp_mgr.mutex);
+
     for (i = 0; i < upnp_mgr.igd_cnt; i++) {
         struct igd *igd = &upnp_mgr.igd_devs[i];
         
@@ -367,21 +373,23 @@ static void set_device_online(const char *dev_id)
 
             if (upnp_mgr.primary_igd_idx < 0) {
                 /* If we don't have a primary IGD, use this. */
-                pj_mutex_lock(upnp_mgr.mutex);
                 upnp_mgr.primary_igd_idx = i;
-                pj_mutex_unlock(upnp_mgr.mutex);
 
                 PJ_LOG(4, (THIS_FILE, "Using primary IGD %s",
                                       upnp_mgr.igd_devs[i].dev_id.ptr));
             }
         }
     }
+
+    pj_mutex_unlock(upnp_mgr.mutex);
 }
 
 /* Update IGD status to offline. */
 static void set_device_offline(const char *dev_id)
 {
     int i;
+
+    pj_mutex_lock(upnp_mgr.mutex);
 
     for (i = 0; i < (int)upnp_mgr.igd_cnt; i++) {
         struct igd *igd = &upnp_mgr.igd_devs[i];
@@ -390,7 +398,6 @@ static void set_device_offline(const char *dev_id)
         if (!pj_strcmp2(&igd->dev_id, dev_id) && igd->valid) {
             igd->alive = PJ_FALSE;
  
-            pj_mutex_lock(upnp_mgr.mutex);
             if (i == upnp_mgr.primary_igd_idx) {
                 unsigned j;
 
@@ -409,9 +416,10 @@ static void set_device_offline(const char *dev_id)
                                       (upnp_mgr.primary_igd_idx < 0? "(none)":
                                       igd->dev_id.ptr)));
             }
-            pj_mutex_unlock(upnp_mgr.mutex);
         }
     }
+
+    pj_mutex_unlock(upnp_mgr.mutex);
 }
 
 /* UPnP client callback. */
@@ -509,7 +517,8 @@ static int client_cb(Upnp_EventType event_type, const void *event,
             if (!check_error_response(response)) {
                 PJ_LOG(4, (THIS_FILE, "Successfully deleted port mapping"));
             }
-            ixmlDocument_free(response);
+            /* According to the sample, we don't need to free this. */
+            // ixmlDocument_free(response);
         }
 
         break;
@@ -849,7 +858,6 @@ PJ_DEF(pj_status_t)pj_upnp_del_port_mapping(const pj_sockaddr *mapped_addr)
     }
 
     igd = &upnp_mgr.igd_devs[upnp_mgr.primary_igd_idx];
-    pj_mutex_unlock(upnp_mgr.mutex);
 
     /* Compare IGD's public IP to the mapped public address. */
     pj_sockaddr_cp(&host_addr, mapped_addr);
@@ -870,7 +878,8 @@ PJ_DEF(pj_status_t)pj_upnp_del_port_mapping(const pj_sockaddr *mapped_addr)
             }
         }
     }
-    
+    pj_mutex_unlock(upnp_mgr.mutex);
+
     if (!igd) {
         /* Either the IGD we previously requested to add port mapping has become
          * offline, or the address is actually not a valid.

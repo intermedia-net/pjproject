@@ -1077,6 +1077,9 @@
 /** Using Apple's Network framework */
 #define PJ_SSL_SOCK_IMP_APPLE       4
 
+/** Using Windows's Schannel */
+#define PJ_SSL_SOCK_IMP_SCHANNEL    5
+
 /**
  * Select which SSL socket implementation to use. Currently pjlib supports
  * PJ_SSL_SOCK_IMP_OPENSSL, which uses OpenSSL, and PJ_SSL_SOCK_IMP_GNUTLS,
@@ -1493,7 +1496,7 @@ PJ_BEGIN_DECL
 #define PJ_VERSION_NUM_MAJOR    2
 
 /** PJLIB version minor number. */
-#define PJ_VERSION_NUM_MINOR    14
+#define PJ_VERSION_NUM_MINOR    15
 
 /** PJLIB version revision number. */
 #define PJ_VERSION_NUM_REV      1
@@ -1502,7 +1505,7 @@ PJ_BEGIN_DECL
  * Extra suffix for the version (e.g. "-trunk"), or empty for
  * web release version.
  */
-#define PJ_VERSION_NUM_EXTRA	"-19"
+#define PJ_VERSION_NUM_EXTRA    "-1"
 
 /**
  * PJLIB version number consists of three bytes with the following format:

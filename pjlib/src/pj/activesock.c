@@ -143,6 +143,9 @@ static void activesock_destroy_iphone_os_stream(pj_activesock_t *asock)
 
 static void activesock_create_iphone_os_stream(pj_activesock_t *asock)
 {
+#if (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && \
+     __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_9_0)
+
     if (ios_bg_support && asock->bg_setting && asock->stream_oriented) {
         activesock_destroy_iphone_os_stream(asock);
 
@@ -164,6 +167,8 @@ static void activesock_create_iphone_os_stream(pj_activesock_t *asock)
             activesock_destroy_iphone_os_stream(asock);
         }
     }
+
+#endif
 }
 
 
@@ -508,7 +513,8 @@ static void ioqueue_on_read_complete(pj_ioqueue_key_t *key,
                 ret = (*asock->cb.on_data_read)(asock, r->pkt, r->size,
                                                 PJ_SUCCESS, &remainder);
                 PJ_ASSERT_ON_FAIL(
-                    !asock->stream_oriented || remainder <= r->size, {
+                    !ret || !asock->stream_oriented || remainder <= r->size,
+                    {
                         PJ_LOG(2, ("",
                                    "App bug! Invalid remainder length from "
                                    "activesock on_data_read()."));
@@ -584,7 +590,8 @@ static void ioqueue_on_read_complete(pj_ioqueue_key_t *key,
                 ret = (*asock->cb.on_data_read)(asock, r->pkt, r->size,
                                                 status, &remainder);
                 PJ_ASSERT_ON_FAIL(
-                    !asock->stream_oriented || remainder <= r->size, {
+                    !ret || !asock->stream_oriented || remainder <= r->size,
+                    {
                         PJ_LOG(2, ("",
                                    "App bug! Invalid remainder length from "
                                    "activesock on_data_read()."));

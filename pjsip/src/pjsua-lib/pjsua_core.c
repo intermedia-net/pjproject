@@ -412,6 +412,7 @@ PJ_DEF(void) pjsua_media_config_default(pjsua_media_config *cfg)
     } else {
         cfg->snd_clock_rate = 0;
     }
+    cfg->snd_use_sw_clock = PJSUA_DEFAULT_SND_USE_SW_CLOCK;
     cfg->channel_count = 1;
     cfg->audio_frame_ptime = PJSUA_DEFAULT_AUDIO_FRAME_PTIME;
     cfg->max_media_ports = PJSUA_MAX_CONF_PORTS;
@@ -486,10 +487,10 @@ static pj_status_t logging_on_tx_msg(pjsip_tx_data *tdata)
      *  transport layer. So don't try to access tp_info when the module
      *  has lower priority than transport layer.
      */
-    PJ_LOG(4,(THIS_FILE, "TX %ld bytes %s to %s %s:\n"
+    PJ_LOG(4,(THIS_FILE, "TX %d bytes %s to %s %s:\n"
                          "%.*s\n"
                          "--end msg--",
-                         (tdata->buf.cur - tdata->buf.start),
+                         (int)(tdata->buf.cur - tdata->buf.start),
                          pjsip_tx_data_get_info(tdata),
                          tdata->tp_info.transport->type_name,
                          pj_addr_str_print(&input_str, 
@@ -667,15 +668,31 @@ static pj_bool_t mod_pjsua_on_rx_request(pjsip_rx_data *rdata)
     pj_bool_t processed = PJ_FALSE;
 
 #if PJSUA_DETECT_MERGED_REQUESTS
-    if (pjsip_tsx_detect_merged_requests(rdata)) {
-        PJ_LOG(4, (THIS_FILE, "Merged request detected"));
+    pjsip_transaction *tsx;
+    if ((tsx = pjsip_tsx_detect_merged_requests(rdata)) != NULL) {
 
-        /* Respond with 482 (Loop Detected) */
-        pjsip_endpt_respond(pjsua_var.endpt, NULL, rdata,
-                            PJSIP_SC_LOOP_DETECTED, NULL,
-                            NULL, NULL, NULL);
+        pjsip_dialog *dlg = pjsip_tsx_get_dlg(tsx);
 
-        return PJ_TRUE;
+        PJ_LOG(4, (THIS_FILE, "Merged request detected (%s) (%s): %s from %s:%d",
+                              dlg ? dlg->obj_name : "-no-dlg-",
+                              tsx->obj_name,
+                              pjsip_rx_data_get_info(rdata),
+                              rdata->pkt_info.src_name,
+                              rdata->pkt_info.src_port));
+
+        /* Don't respond to ACK, even if it looks like a merged request 
+         * Let it be "dropped/unhandled by any modules"
+         */
+        if (pjsip_method_cmp(&rdata->msg_info.msg->line.req.method,
+                             &pjsip_ack_method) == 0) {
+            return PJ_FALSE;
+        } else {
+            /* Respond with 482 (Loop Detected) */
+            pjsip_endpt_respond(pjsua_var.endpt, NULL, rdata,
+                                PJSIP_SC_LOOP_DETECTED, NULL,
+                                NULL, NULL, NULL);
+            return PJ_TRUE;
+        }
     }
 #endif
 
@@ -743,6 +760,8 @@ static void log_writer(int level, const char *buffer, int len)
 PJ_DEF(pj_status_t) pjsua_reconfigure_logging(const pjsua_logging_config *cfg)
 {
     pj_status_t status;
+
+    PJ_ASSERT_RETURN(cfg, PJ_EINVAL);
 
     /* Save config. */
     pjsua_logging_config_dup(pjsua_var.pool, &pjsua_var.log_cfg, cfg);
@@ -1261,6 +1280,9 @@ PJ_DEF(pj_status_t) pjsua_init( const pjsua_config *ua_cfg,
 
     /* Init presence module: */
     status = pjsip_pres_init_module( pjsua_var.endpt, pjsip_evsub_instance());
+    PJ_ASSERT_RETURN(status == PJ_SUCCESS, status);
+
+    status = pjsip_dlg_event_init_module( pjsua_var.endpt, pjsip_evsub_instance());
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, status);
 
     /* Initialize MWI support */
@@ -2935,6 +2957,7 @@ PJ_DEF(pj_status_t) pjsua_transport_get_info( pjsua_transport_id id,
 }
 
 
+#if 0
 /*
  * Disable a transport or re-enable it.
  */
@@ -2955,6 +2978,7 @@ PJ_DEF(pj_status_t) pjsua_transport_set_enable( pjsua_transport_id id,
 
     return PJ_EINVALIDOP;
 }
+#endif
 
 
 /*
@@ -3369,7 +3393,7 @@ PJ_DEF(pj_status_t) pjsua_verify_sip_url(const char *c_url)
     pool = pj_pool_create(&pjsua_var.cp.factory, "check%p", 1024, 0, NULL);
     if (!pool) return PJ_ENOMEM;
 
-    url = (char*) pj_pool_alloc(pool, len+1);
+    url = (char*) pj_pool_calloc(pool, 1, (unsigned)len+1);
     pj_ansi_strxcpy(url, c_url, len+1);
 
     p = pjsip_parse_uri(pool, url, len, 0);
@@ -3843,12 +3867,22 @@ static pj_status_t restart_listener(pjsua_transport_id id,
     pj_sockaddr bind_addr;
     pjsua_transport_info tp_info;
     pj_status_t status;
+    pj_bool_t tp_valid = PJ_TRUE;
+    pj_uint16_t saf;
 
-    pjsua_transport_get_info(id, &tp_info);
+    status = pjsua_transport_get_info(id, &tp_info);
+    if (status != PJ_SUCCESS) {
+        /* Transport not valid or already destroyed */
+        tp_valid = PJ_FALSE;
+        goto on_return;
+    }
+
+    saf = tp_info.local_addr.addr.sa_family;
     pj_sockaddr_init(pjsip_transport_type_get_af(tp_info.type),
-                     &bind_addr,
-                     NULL,
-                     pj_sockaddr_get_port(&tp_info.local_addr));
+                        &bind_addr,
+                        NULL,
+                        (saf==PJ_AF_INET || saf==PJ_AF_INET6)?
+                            pj_sockaddr_get_port(&tp_info.local_addr) : 0);
 
     switch (tp_info.type) {
     case PJSIP_TRANSPORT_UDP:
@@ -3857,10 +3891,7 @@ static pj_status_t restart_listener(pjsua_transport_id id,
         unsigned num_locks = 0;
 
         /* Release locks before restarting the transport, to avoid deadlock. */
-        while (PJSUA_LOCK_IS_LOCKED()) {
-            num_locks++;
-            PJSUA_UNLOCK();
-        }
+        num_locks = PJSUA_RELEASE_LOCK();
 
         status = pjsip_udp_transport_restart2(
                                        pjsua_var.tpdata[id].data.tp,
@@ -3900,7 +3931,9 @@ static pj_status_t restart_listener(pjsua_transport_id id,
     PJ_PERROR(3,(THIS_FILE, status, "Listener %.*s restart",
                  (int)tp_info.info.slen, tp_info.info.ptr));
 
-    if (status != PJ_SUCCESS && (restart_lis_delay > 0)) {
+on_return:
+
+    if (tp_valid && status != PJ_SUCCESS && (restart_lis_delay > 0)) {
         /* Try restarting again, with delay. */
         pjsua_schedule_timer2(&restart_listener_cb,
                               (void*)(pj_size_t)id,
@@ -3994,15 +4027,15 @@ PJ_DEF(pj_status_t) pjsua_handle_ip_change(const pjsua_ip_change_param *param)
 
     /* Shutdown all TCP/TLS transports */
     if (param->shutdown_transport) {
-        pjsip_tpmgr_shutdown_param param;
+        pjsip_tpmgr_shutdown_param sd_param;
 
-        pjsip_tpmgr_shutdown_param_default(&param);
-        param.include_udp = PJ_FALSE;
+        pjsip_tpmgr_shutdown_param_default(&sd_param);
+        sd_param.include_udp = PJ_FALSE;
 
         PJ_LOG(4,(THIS_FILE, "IP change shutting down transports.."));
         status = pjsip_tpmgr_shutdown_all(
                                     pjsip_endpt_get_tpmgr(pjsua_var.endpt),
-                                    &param);
+                                    &sd_param);
 
         /* Provide dummy info instead of NULL info to avoid possible crash
          * (if app does not check).

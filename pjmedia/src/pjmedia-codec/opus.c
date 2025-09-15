@@ -653,6 +653,7 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
     struct opus_data *opus_data = (struct opus_data *)codec->codec_data;
     int idx, err;
     pj_bool_t auto_bit_rate = PJ_TRUE;
+    pj_bool_t enc_use_plc = PJ_FALSE;
 
     PJ_ASSERT_RETURN(codec && attr && opus_data, PJ_EINVAL);
 
@@ -709,7 +710,10 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
     if (idx >= 0) {
         unsigned plc;
         plc = (unsigned) pj_strtoul(&attr->setting.enc_fmtp.param[idx].val);
-        attr->setting.plc = plc > 0? PJ_TRUE: PJ_FALSE;
+        if (plc > 0)
+            enc_use_plc = PJ_TRUE;
+        /* Do not modify local PLC setting as it's used for decoding. */
+        // attr->setting.plc = plc > 0? PJ_TRUE: PJ_FALSE
     }
 
     /* Check vad */
@@ -762,7 +766,7 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
     opus_encoder_ctl(opus_data->enc, OPUS_SET_DTX(attr->setting.vad ? 1 : 0));
     /* Set PLC */
     opus_encoder_ctl(opus_data->enc,
-                     OPUS_SET_INBAND_FEC(attr->setting.plc ? 1 : 0));
+                     OPUS_SET_INBAND_FEC(enc_use_plc));
     /* Set bandwidth */
     opus_encoder_ctl(opus_data->enc,
                      OPUS_SET_MAX_BANDWIDTH(get_opus_bw_constant(
@@ -951,7 +955,7 @@ static pj_status_t  codec_parse( pjmedia_codec *codec,
                                            sizeof(tmp_buf));
         if (size < 0) {
             PJ_LOG(5, (THIS_FILE, "Parse failed! (pkt_size=%lu, err=%d)",
-                       pkt_size, size));
+                       (unsigned long)pkt_size, size));
             pj_mutex_unlock (opus_data->mutex);
             return PJMEDIA_CODEC_EFAILED;
         }
@@ -1307,8 +1311,11 @@ static pj_status_t reset_stat(pjmedia_codec_opus_stat *stat)
 }
 
 #if defined(_MSC_VER)
-#   pragma comment(lib, "libopus.a")
+#  if 1 /* Change to 0 if Opus lib name is "opus.lib" */
+#    pragma comment(lib, "libopus.a")
+#  else
+#    pragma comment(lib, "opus.lib")
+#  endif
 #endif
-
 
 #endif /* PJMEDIA_HAS_OPUS_CODEC */

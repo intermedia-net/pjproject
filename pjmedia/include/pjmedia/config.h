@@ -65,10 +65,19 @@
 #endif
 
 /**
- * Memory increment for evnt manager.
+ * Memory increment for event manager.
  */
 #ifndef PJMEDIA_POOL_INC_EVTMGR
 #   define PJMEDIA_POOL_INC_EVTMGR              500
+#endif
+
+/**
+ * Maximum number of events that can be handled by event manager.
+ *
+ * Default: 16
+ */
+#ifndef PJMEDIA_EVENT_MAX_EVENTS
+#   define PJMEDIA_EVENT_MAX_EVENTS             16
 #endif
 
 /**
@@ -975,8 +984,8 @@
 
 /**
  * Specify the tone generator algorithm to be used. Please see 
- * http://trac.pjsip.org/repos/wiki/Tone_Generator for the performance
- * analysis results of the various tone generator algorithms.
+ * https://docs.pjsip.org/en/latest/specific-guides/media/tonegen.html for
+ * the performance analysis results of the various tone generator algorithms.
  *
  * Default value:
  *  - PJMEDIA_TONEGEN_FLOATING_POINT when PJ_HAS_FLOATING_POINT is set

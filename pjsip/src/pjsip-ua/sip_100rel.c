@@ -269,6 +269,12 @@ PJ_DEF(pj_status_t) pjsip_100rel_create_prack( pjsip_inv_session *inv,
     }
     rseq = (pj_uint32_t) pj_strtoul(&rseq_hdr->hvalue);
 
+    if (rseq < 1) {
+        PJ_LOG(4, (dd->inv->dlg->obj_name,
+                   "Ignoring 100rel response RSeq header value less than 1"));
+        return PJ_EIGNORED;
+    }
+
     /* Find UAC state for the specified call leg */
     uac_state = dd->uac_state_list;
     while (uac_state) {
@@ -857,8 +863,9 @@ PJ_DEF(pj_status_t) pjsip_100rel_tx_response(pjsip_inv_session *inv,
             status = PJ_SUCCESS;
             
             PJ_LOG(4,(dd->inv->dlg->obj_name, 
-                      "Reliable %d response enqueued (%ld pending)", 
-                      code, pj_list_size(&dd->uas_state->tx_data_list)));
+                      "Reliable %d response enqueued (%lu pending)", 
+                      code, (unsigned long)
+                      pj_list_size(&dd->uas_state->tx_data_list)));
             
         } else {
             pj_list_push_back(&dd->uas_state->tx_data_list, tl);

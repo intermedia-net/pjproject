@@ -433,14 +433,20 @@ on_make_call_med_tp_complete(pjsua_call_id call_id,
 {
     pjmedia_sdp_session *offer = NULL;
     pjsip_inv_session *inv = NULL;
-    pjsua_call *call = &pjsua_var.calls[call_id];
-    pjsua_acc *acc = &pjsua_var.acc[call->acc_id];
-    pjsip_dialog *dlg = call->async_call.dlg;
+    pjsua_call *call;
+    pjsua_acc *acc;
+    pjsip_dialog *dlg;
     unsigned options = 0;
     pjsip_tx_data *tdata;
     pj_bool_t cb_called = PJ_FALSE;
     pjsip_tpselector tp_sel;
     pj_status_t status = (info? info->status: PJ_SUCCESS);
+
+    /* Get call, account, and dialog */
+    PJ_ASSERT_RETURN(call_id != PJSUA_INVALID_ID, PJ_EINVAL);
+    call = &pjsua_var.calls[call_id];
+    acc = &pjsua_var.acc[call->acc_id];
+    dlg = call->async_call.dlg;
 
     PJSUA_LOCK();
 
@@ -881,6 +887,8 @@ PJ_DEF(pj_status_t) pjsua_call_make_call(pjsua_acc_id acc_id,
     if (status != PJ_SUCCESS) {
         pjsua_perror(THIS_FILE, "Failed to apply call setting", status);
         goto on_error;
+    } else if (!opt) {
+        opt = &call->opt;
     }
     
     /* Create sound port if none is instantiated, to check if sound device
@@ -952,6 +960,20 @@ PJ_DEF(pj_status_t) pjsua_call_make_call(pjsua_acc_id acc_id,
     if (status != PJ_SUCCESS) {
         pjsua_perror(THIS_FILE, "Dialog creation failed", status);
         goto on_error;
+    }
+
+    /*
+     * Use pre defined Call-ID to be sent out with INVITE as opposed
+     * to using a randomly generated Call-ID
+     */
+
+    if( opt->custom_call_id.slen > 0 ){
+        pj_strdup(dlg->pool, &dlg->call_id->id, &opt->custom_call_id);
+        PJ_LOG(4,(THIS_FILE, "Set user defined "
+                             "Call-ID (%.*s)",
+                  (int)dlg->call_id->id.slen, dlg->call_id->id.ptr  ));
+        pj_bzero(&call->opt.custom_call_id,
+                  sizeof(call->opt.custom_call_id));
     }
 
     /* Increment the dialog's lock otherwise when invite session creation
@@ -2041,7 +2063,7 @@ pj_bool_t pjsua_call_on_incoming(pjsip_rx_data *rdata)
                                       NULL);
                 }               
 
-                if (call->inv->dlg) {
+                if (call->inv && call->inv->dlg) {
                     pjsip_inv_terminate(call->inv, sip_err_code, PJ_FALSE);
                 }
                 pjsip_dlg_dec_lock(dlg);
@@ -3773,7 +3795,7 @@ PJ_DEF(pj_status_t) pjsua_call_send_dtmf(pjsua_call_id call_id,
                        get_dtmf_method_name(param->method)));
 
     if (param->method == PJSUA_DTMF_METHOD_RFC2833) {
-        status = pjsua_call_dial_dtmf(call_id, &param->digits);
+        status = pjsua_call_dial_dtmf2(call_id, &param->digits, param->duration);
     } else if (param->method == PJSUA_DTMF_METHOD_SIP_INFO) {
         const pj_str_t SIP_INFO = pj_str("INFO");
         int i;
@@ -5135,10 +5157,7 @@ static void pjsua_call_on_state_changed(pjsip_inv_session *inv,
     }
 
     /* Release locks before calling callbacks, to avoid deadlock. */
-    while (PJSUA_LOCK_IS_LOCKED()) {
-        num_locks++;
-        PJSUA_UNLOCK();
-    }
+    num_locks = PJSUA_RELEASE_LOCK();
 
     /* Ticket #1627: Invoke on_call_tsx_state() when call is disconnected.
      *
@@ -5160,8 +5179,7 @@ static void pjsua_call_on_state_changed(pjsip_inv_session *inv,
         (*pjsua_var.ua_cfg.cb.on_call_state)(call->index, e);
 
     /* Re-acquire the locks. */
-    for (;num_locks > 0; num_locks--)
-        PJSUA_LOCK();
+    PJSUA_RELOCK(num_locks);
 
     /* call->inv may be NULL now */
 

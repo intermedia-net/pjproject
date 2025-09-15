@@ -119,7 +119,8 @@ static int server_thread(void *p)
             pkt_len = pj_ansi_snprintf(pkt, srv->buf_size, 
                                        "HTTP/1.0 200 OK\r\n");
             PJ_ASSERT_ON_FAIL(pkt_len>0, {
-                PJ_PERROR(2, (THIS_FILE, -pkt_len, "Error creating response"));
+                PJ_LOG(2, (THIS_FILE, "Error creating response, pkt_len=%ld",
+                           pkt_len));
                 pj_sock_close(newsock);
                 continue;
             })
@@ -130,7 +131,8 @@ static int server_thread(void *p)
             }
             pkt_len = pj_ansi_strxcat(pkt, "\r\n", srv->buf_size);
             if (pkt_len < 0) {
-                PJ_PERROR(2, (THIS_FILE, -pkt_len, "Error creating response"));
+                PJ_LOG(2, (THIS_FILE, "Error creating response 2, pkt_len=%ld",
+                           pkt_len));
                 pj_sock_close(newsock);
                 continue;
             }
@@ -163,7 +165,7 @@ static void on_data_read(pj_http_req *hreq, void *data, pj_size_t size)
     PJ_UNUSED_ARG(hreq);
     PJ_UNUSED_ARG(data);
 
-    PJ_LOG(5, (THIS_FILE, "\nData received: %ld bytes", size));
+    PJ_LOG(5, (THIS_FILE, "\nData received: %lu bytes", (unsigned long)size));
     if (size > 0) {
 #ifdef VERBOSE
         printf("%.*s\n", (int)size, (char *)data);
@@ -190,8 +192,8 @@ static void on_send_data(pj_http_req *hreq,
     *data = sdata;
     *size = sendsz;
 
-    PJ_LOG(5, (THIS_FILE, "\nSending data progress: %ld out of %ld bytes", 
-           send_size, total_size));
+    PJ_LOG(5, (THIS_FILE, "\nSending data progress: %lu out of %lu bytes",
+           (unsigned long)send_size, (unsigned long)total_size));
 }
 
 
@@ -210,7 +212,8 @@ static void on_complete(pj_http_req *hreq, pj_status_t status,
         PJ_LOG(3, (THIS_FILE, "Error %d", status));
         return;
     }
-    PJ_LOG(5, (THIS_FILE, "\nData completed: %ld bytes", resp->size));
+    PJ_LOG(5, (THIS_FILE, "\nData completed: %lu bytes",
+               (unsigned long)resp->size));
     if (resp->size > 0 && resp->data) {
 #ifdef VERBOSE
         printf("%.*s\n", (int)resp->size, (char *)resp->data);

@@ -816,6 +816,9 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
         return;
     }
 
+    /* Add ref counter to avoid premature destroy from callbacks */
+    pj_grp_lock_add_ref(stream->grp_lock);
+
     /* Ignore the packet if decoder is paused */
     if (channel->paused)
         goto on_return;
@@ -1042,6 +1045,8 @@ on_return:
             stream->initial_rr = PJ_TRUE;
         }
     }
+
+    pj_grp_lock_dec_ref(stream->grp_lock);
 }
 
 
@@ -2044,7 +2049,7 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_create(
     pj_sockaddr_cp(&stream->rem_rtp_addr, &info->rem_addr);
     if (info->rtcp_mux) {
         pj_sockaddr_cp(&att_param.rem_rtcp, &info->rem_addr);
-    } else if (pj_sockaddr_has_addr(&info->rem_rtcp.addr)) {
+    } else if (pj_sockaddr_has_addr(&info->rem_rtcp)) {
         pj_sockaddr_cp(&att_param.rem_rtcp, &info->rem_rtcp);
     }
     att_param.addr_len = pj_sockaddr_get_len(&info->rem_addr);
@@ -2057,6 +2062,10 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_create(
         goto err_cleanup;
 
     stream->transport = tp;
+
+    /* Also add ref the transport group lock */
+    if (stream->transport->grp_lock)
+        pj_grp_lock_add_ref(stream->transport->grp_lock);
 
     /* Send RTCP SDES */
     if (!stream->rtcp_sdes_bye_disabled) {
@@ -2207,7 +2216,7 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_destroy( pjmedia_vid_stream *stream )
      */
     if (stream->transport) {
         pjmedia_transport_detach(stream->transport, stream);
-        stream->transport = NULL;
+        //stream->transport = NULL;
     }
 
     /* This function may be called when stream is partly initialized,
@@ -2232,6 +2241,10 @@ static void on_destroy( void *arg )
     pj_assert(stream);
 
     PJ_LOG(4,(THIS_FILE, "Destroying %s..", stream->name.ptr));
+
+    /* Release ref to transport */
+    if (stream->transport && stream->transport->grp_lock)
+        pj_grp_lock_dec_ref(stream->transport->grp_lock);
 
     /* Free codec. */
     if (stream->codec) {

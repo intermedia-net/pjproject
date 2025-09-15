@@ -917,6 +917,12 @@ PJ_DEF(pj_status_t) pj_dns_resolver_start_query( pj_dns_resolver *resolver,
             cache->ref_cnt++;
             pj_grp_lock_release(resolver->grp_lock);
 
+            /* Since we're returning an answer from cache,
+             * there is no query object to return.
+             */
+            if (p_query)
+                *p_query = NULL;
+
             /* This cached response is still valid. Just return this
              * response to caller.
              */
@@ -1942,12 +1948,12 @@ PJ_DEF(void) pj_dns_resolver_dump(pj_dns_resolver *resolver,
         }
     }
     PJ_LOG(3,(resolver->name.ptr, "  Nb. of pending query free nodes: %lu",
-              pj_list_size(&resolver->query_free_nodes)));
+              (unsigned long)pj_list_size(&resolver->query_free_nodes)));
     PJ_LOG(3,(resolver->name.ptr, "  Nb. of timer entries: %lu",
-              pj_timer_heap_count(resolver->timer)));
+              (unsigned long)pj_timer_heap_count(resolver->timer)));
     PJ_LOG(3,(resolver->name.ptr, "  Pool capacity: %lu, used size: %lu",
-              pj_pool_get_capacity(resolver->pool),
-              pj_pool_get_used_size(resolver->pool)));
+              (unsigned long)pj_pool_get_capacity(resolver->pool),
+              (unsigned long)pj_pool_get_used_size(resolver->pool)));
 
     pj_grp_lock_release(resolver->grp_lock);
 #endif

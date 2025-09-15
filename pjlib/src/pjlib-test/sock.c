@@ -541,14 +541,15 @@ static int send_recv_test(int sock_type,
                 rc = -155; goto on_error;
             }
             if (received <= 0) {
-                PJ_LOG(3,("", "...error: socket has closed! (received=%ld)",
-                          received));
+                PJ_LOG(3,("", "...error: socket has closed! (received=%lu)",
+                          (unsigned long)received));
                 rc = -156; goto on_error;
             }
             if (received != DATA_LEN-total_received) {
                 if (sock_type != pj_SOCK_STREAM()) {
                     PJ_LOG(3,("", "...error: expecting %lu bytes, got %lu bytes",
-                              DATA_LEN-total_received, received));
+                              (unsigned long)(DATA_LEN-total_received),
+                              (unsigned long)received));
                     rc = -157; goto on_error;
                 }
             }
@@ -599,14 +600,15 @@ static int send_recv_test(int sock_type,
             rc = -170; goto on_error;
         }
         if (received <= 0) {
-            PJ_LOG(3,("", "...error: socket has closed! (received=%ld)",
-                      received));
+            PJ_LOG(3,("", "...error: socket has closed! (received=%lu)",
+                      (unsigned long)received));
             rc = -173; goto on_error;
         }
         if (received != BIG_DATA_LEN-total_received) {
             if (sock_type != pj_SOCK_STREAM()) {
                 PJ_LOG(3,("", "...error: expecting %lu bytes, got %lu bytes",
-                          BIG_DATA_LEN-total_received, received));
+                          (unsigned long)BIG_DATA_LEN-total_received,
+                          (unsigned long)received));
                 rc = -176; goto on_error;
             }
         }
@@ -864,7 +866,8 @@ static int do_sockpair_tst(int family, int type, int proto)
         goto on_error;
 
     /* sv[0] send text to sv[1] */
-    len = pj_ansi_snprintf(buf, sizeof(buf), "hello, %ld->%ld", sv[0], sv[1]);
+    len = pj_ansi_snprintf(buf, sizeof(buf), "hello, %ld->%ld",
+                           (long)sv[0], (long)sv[1]);
     rc = pj_sock_send(sv[0], buf, &len, 0);
     if (rc != PJ_SUCCESS)
         goto on_error;
@@ -877,7 +880,8 @@ static int do_sockpair_tst(int family, int type, int proto)
     PJ_LOG(3, ("test", "recv: %.*s", (int)len, buf));
 
     /* sv[1] send text to sv[0] */
-    len = pj_ansi_snprintf(buf, sizeof(buf), "hello, %ld->%ld", sv[1], sv[0]);
+    len = pj_ansi_snprintf(buf, sizeof(buf), "hello, %ld->%ld",
+                           (long)sv[1], (long)sv[0]);
     rc = pj_sock_send(sv[1], buf, &len, 0);
     if (rc != PJ_SUCCESS)
         goto on_error;

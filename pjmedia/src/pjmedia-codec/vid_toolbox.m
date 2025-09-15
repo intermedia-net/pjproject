@@ -554,17 +554,20 @@ static OSStatus create_encoder(vtool_codec_data *vtool_data)
 
     ret = VTSessionCopySupportedPropertyDictionary(vtool_data->enc,
                                                    &supported_prop);
-    if (ret == noErr &&
-        CFDictionaryContainsKey(supported_prop,
+    if (ret == noErr) {
+        if (CFDictionaryContainsKey(supported_prop,
                                 kVTCompressionPropertyKey_MaxH264SliceBytes))
-    {
-        /* kVTCompressionPropertyKey_MaxH264SliceBytes is not yet supported
-         * by Apple. We leave it here for possible future enhancements.
-        SET_PROPERTY(vtool_data->enc,
-                     kVTCompressionPropertyKey_MaxH264SliceBytes,
-                     // param->enc_mtu - NAL_HEADER_ADD_0X30BYTES
-                     (__bridge CFTypeRef)@(param->enc_mtu - 50));
-         */
+        {
+            /* kVTCompressionPropertyKey_MaxH264SliceBytes is not yet supported
+             * by Apple. We leave it here for possible future enhancements.
+            SET_PROPERTY(vtool_data->enc,
+                         kVTCompressionPropertyKey_MaxH264SliceBytes,
+                         // param->enc_mtu - NAL_HEADER_ADD_0X30BYTES
+                         (__bridge CFTypeRef)@(param->enc_mtu - 50));
+             */
+        }
+
+        CFRelease(supported_prop);
     }
 
     VTCompressionSessionPrepareToEncodeFrames(vtool_data->enc);
@@ -1404,8 +1407,8 @@ on_return:
                               PJMEDIA_EVENT_PUBLISH_DEFAULT);
 
         PJ_LOG(5,(THIS_FILE, "Decode couldn't produce picture, "
-                  "input nframes=%ld, concatenated size=%d bytes",
-                  count, whole_len));
+                  "input nframes=%lu, concatenated size=%d bytes",
+                  (unsigned long)count, whole_len));
 
         output->type = PJMEDIA_FRAME_TYPE_NONE;
         output->size = 0;

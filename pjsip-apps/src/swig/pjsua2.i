@@ -121,6 +121,13 @@ using namespace pj;
 %feature("director") FindBuddyMatch;
 %feature("director") AudioMediaPlayer;
 %feature("director") AudioMediaPort;
+// PendingJob is only used on Python
+#ifdef SWIGPYTHON
+    %feature("director") PendingJob;
+#else
+    %ignore pj::PendingJob;
+    %ignore pj::Endpoint::utilAddPendingJob;
+#endif
 
 //
 // STL stuff.
@@ -159,6 +166,7 @@ using namespace pj;
 
 %include "pjsua2/siptypes.hpp"
 
+%template(SockOptVector)		std::vector<pj::SockOpt>;
 %template(SipHeaderVector)		std::vector<pj::SipHeader>;
 %template(AuthCredInfoVector)		std::vector<pj::AuthCredInfo>;
 %template(SrtpCryptoVector)		std::vector<pj::SrtpCrypto>;
@@ -243,6 +251,13 @@ using namespace pj;
 	Runtime.getRuntime().gc();
 	libDestroy_();
   }
+%}
+#endif
+
+#ifdef SWIGPYTHON
+%pythonprepend pj::Endpoint::utilAddPendingJob(PendingJob *job) %{
+    # print('disowning job')
+    job.__disown__()
 %}
 #endif
 
