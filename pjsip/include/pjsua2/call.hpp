@@ -1408,6 +1408,18 @@ public:
 };
 
 /**
+ * This structure contains parameters for Call::onCallRecState() callback.
+ */
+struct OnCallRecStateParam
+{
+    /**
+     * The recording state.
+     */
+    string state;
+
+};
+
+/**
  * Call.
  */
 class Call
@@ -2267,6 +2279,14 @@ public:
      */
     virtual void
     onCreateMediaTransportSrtp(OnCreateMediaTransportSrtpParam &prm)
+    { PJ_UNUSED_ARG(prm); }
+
+    /**
+     * Notify application when call recording state has changed.
+     *
+     * @param prm       Callback parameter.
+     */
+    virtual void onCallRecState(OnCallRecStateParam &prm)
     { PJ_UNUSED_ARG(prm); }
 
 private:

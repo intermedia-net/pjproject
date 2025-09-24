@@ -2722,7 +2722,14 @@ void Endpoint::on_rec_state(pjsua_call_id call_id, const pjsip_msg_body *rec_sta
         return;
     }
 
-//    string recState = string((char *) rec_state->data, rec_state->len);
-//
-//    PJ_LOG(1,(THIS_FILE, "on_rec_state, body: %s", recState.c_str()));
+    OnCallRecStateParam prm;
+
+    if (rec_state && rec_state->len) {
+        string recState = string((char *) rec_state->data, rec_state->len);
+        prm.state = recState;
+    } else {
+        prm.state = "";
+    }
+
+    call->onCallRecState(prm);
 }

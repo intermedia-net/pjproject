@@ -6668,8 +6668,6 @@ static void pjsua_call_on_tsx_state_changed(pjsip_inv_session *inv,
             }
 
             if (pjsua_var.ua_cfg.enable_rec) {
-//                char *message = (char *) pj_pool_alloc(inv->dlg->pool, body->len);
-//                pjsip_print_text_body(body, message, body->len);
                 pjsua_var.ua_cfg.cb.on_rec_state(call->index, body);
             }
         }

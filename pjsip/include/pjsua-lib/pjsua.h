@@ -1173,7 +1173,7 @@ typedef struct pjsua_callback
     void (*on_call_state)(pjsua_call_id call_id, pjsip_event *e);
 
     /**
-     * Notify application on recording state.
+     * Notify application when call recording state has changed.
      *
      * @param call_id   The call index.
      * @param rec_state The recording state.
