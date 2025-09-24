@@ -6277,6 +6277,7 @@ static void pjsua_call_on_tsx_state_changed(pjsip_inv_session *inv,
     const pj_str_t STR_MEDIA_CONTROL_XML = { "media_control+xml", 17 };
     const pj_str_t STR_DTMF_RELAY        = { "dtmf-relay", 10 };
     const pj_str_t STR_TRICKLE_ICE_SDP   = { "trickle-ice-sdpfrag", 19 };
+    const pj_str_t STR_X_REC             = { "x-rec-compact+json", 18 };
 
     pjsua_call *call;
 
@@ -6645,6 +6646,32 @@ static void pjsua_call_on_tsx_state_changed(pjsip_inv_session *inv,
             }
             if (status == PJ_SUCCESS)
                 status = pjsip_tsx_send_msg(tsx, tdata);
+        }
+
+        else if (body && body->len &&
+                 pj_stricmp(&body->content_type.type, &STR_APPLICATION) == 0 &&
+                 pj_stricmp(&body->content_type.subtype, &STR_X_REC)==0)
+        {
+            pjsip_tx_data *tdata;
+            pj_status_t status;
+
+            if (pjsua_var.ua_cfg.enable_rec) {
+                status = pjsip_endpt_create_response(tsx->endpt, rdata,
+                                                     200, NULL, &tdata);
+            } else {
+                status = pjsip_endpt_create_response(tsx->endpt, rdata,
+                                                     400, NULL, &tdata);
+            }
+
+            if (status == PJ_SUCCESS) {
+                status = pjsip_tsx_send_msg(tsx, tdata);
+            }
+
+            if (pjsua_var.ua_cfg.enable_rec) {
+//                char *message = (char *) pj_pool_alloc(inv->dlg->pool, body->len);
+//                pjsip_print_text_body(body, message, body->len);
+                pjsua_var.ua_cfg.cb.on_rec_state(call->index, body);
+            }
         }
 
     } else if (tsx->role == PJSIP_ROLE_UAC && 
