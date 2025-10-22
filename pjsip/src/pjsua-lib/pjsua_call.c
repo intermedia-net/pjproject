@@ -6667,7 +6667,7 @@ static void pjsua_call_on_tsx_state_changed(pjsip_inv_session *inv,
                 status = pjsip_tsx_send_msg(tsx, tdata);
             }
 
-            if (pjsua_var.ua_cfg.enable_rec) {
+            if (pjsua_var.ua_cfg.enable_rec && pjsua_var.ua_cfg.cb.on_rec_state) {
                 pjsua_var.ua_cfg.cb.on_rec_state(call->index, body);
             }
         }
