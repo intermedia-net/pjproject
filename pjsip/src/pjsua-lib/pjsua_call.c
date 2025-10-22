@@ -6656,6 +6656,10 @@ static void pjsua_call_on_tsx_state_changed(pjsip_inv_session *inv,
             pj_status_t status;
 
             if (pjsua_var.ua_cfg.enable_rec) {
+                if (pjsua_var.ua_cfg.cb.on_rec_state) {
+                    pjsua_var.ua_cfg.cb.on_rec_state(call->index, body);
+                }
+
                 status = pjsip_endpt_create_response(tsx->endpt, rdata,
                                                      200, NULL, &tdata);
             } else {
@@ -6665,10 +6669,6 @@ static void pjsua_call_on_tsx_state_changed(pjsip_inv_session *inv,
 
             if (status == PJ_SUCCESS) {
                 status = pjsip_tsx_send_msg(tsx, tdata);
-            }
-
-            if (pjsua_var.ua_cfg.enable_rec && pjsua_var.ua_cfg.cb.on_rec_state) {
-                pjsua_var.ua_cfg.cb.on_rec_state(call->index, body);
             }
         }
 
