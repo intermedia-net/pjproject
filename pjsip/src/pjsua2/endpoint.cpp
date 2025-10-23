@@ -279,6 +279,7 @@ void UaConfig::fromPj(const pjsua_config &ua_cfg)
     this->enableUpnp = PJ2BOOL(ua_cfg.enable_upnp);
     this->upnpIfName = pj2Str(ua_cfg.upnp_if_name);
     this->ignoreUnexpectedInvites = PJ2BOOL(ua_cfg.ignore_unexpected_invites);
+    this->enableRec = PJ2BOOL(ua_cfg.enable_rec);
 }
 
 pjsua_config UaConfig::toPj() const
@@ -320,6 +321,7 @@ pjsua_config UaConfig::toPj() const
     pua_cfg.enable_upnp = this->enableUpnp;
     pua_cfg.upnp_if_name = str2Pj(this->upnpIfName);
     pua_cfg.ignore_unexpected_invites = this->ignoreUnexpectedInvites;
+    pua_cfg.enable_rec = this->enableRec;
 
     return pua_cfg;
 }
@@ -341,6 +343,7 @@ void UaConfig::readObject(const ContainerNode &node) PJSUA2_THROW(Error)
     NODE_READ_BOOL    ( this_node, enableUpnp);
     NODE_READ_STRING  ( this_node, upnpIfName);
     NODE_READ_BOOL    ( this_node, ignoreUnexpectedInvites);
+    NODE_READ_BOOL    ( this_node, enableRec);
 }
 
 void UaConfig::writeObject(ContainerNode &node) const PJSUA2_THROW(Error)
@@ -360,6 +363,7 @@ void UaConfig::writeObject(ContainerNode &node) const PJSUA2_THROW(Error)
     NODE_WRITE_BOOL    ( this_node, enableUpnp);
     NODE_WRITE_STRING  ( this_node, upnpIfName);
     NODE_WRITE_BOOL    ( this_node, ignoreUnexpectedInvites);
+    NODE_WRITE_BOOL    ( this_node, enableRec);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1970,6 +1974,7 @@ void Endpoint::libInit(const EpConfig &prmEpConfig) PJSUA2_THROW(Error)
     ua_cfg.cb.on_stun_resolution_complete = 
         &Endpoint::stun_resolve_cb;
     ua_cfg.cb.on_rejected_incoming_call = &Endpoint::on_rejected_incoming_call;
+    ua_cfg.cb.on_rec_state              = &Endpoint::on_rec_state;
 
     /* Init! */
     PJSUA2_CHECK_EXPR( pjsua_init(&ua_cfg, &log_cfg, &med_cfg) );
@@ -2709,4 +2714,22 @@ void Endpoint::on_rejected_incoming_call(
         prm.rdata.fromPj(*param->rdata);
 
     Endpoint::instance().onRejectedIncomingCall(prm);
+}
+
+void Endpoint::on_rec_state(pjsua_call_id call_id, const pjsip_msg_body *rec_state) {
+    Call *call = Call::lookup(call_id);
+    if (!call) {
+        return;
+    }
+
+    OnCallRecStateParam prm;
+
+    if (rec_state && rec_state->len) {
+        string recState = string((char *) rec_state->data, rec_state->len);
+        prm.state = recState;
+    } else {
+        prm.state = "";
+    }
+
+    call->onCallRecState(prm);
 }

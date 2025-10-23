@@ -787,6 +787,13 @@ struct UaConfig : public PersistentObject
      */
     bool                ignoreUnexpectedInvites;
 
+    /**
+     * Specify whether on-demand recording is enabled or not.
+     *
+     * Default: FALSE
+     */
+    bool                enableRec;
+
 public:
     /**
      * Default constructor to initialize with default values.
@@ -2155,6 +2162,8 @@ private:
 
     static void on_rejected_incoming_call(
                                       const pjsua_on_rejected_incoming_call_param *param);
+
+    static void on_rec_state(pjsua_call_id call_id, const pjsip_msg_body *rec_state);
 
     friend class Account;
 

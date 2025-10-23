@@ -1173,6 +1173,14 @@ typedef struct pjsua_callback
     void (*on_call_state)(pjsua_call_id call_id, pjsip_event *e);
 
     /**
+     * Notify application when call recording state has changed.
+     *
+     * @param call_id   The call index.
+     * @param rec_state The recording state.
+     */
+    void (*on_rec_state)(pjsua_call_id call_id, const pjsip_msg_body *rec_state);
+
+    /**
      * Notify application on incoming call.
      *
      * @param acc_id    The account which match the incoming call.
@@ -2431,6 +2439,13 @@ typedef struct pjsua_config
      * Default: PJ_FALSE
      */
     pj_bool_t        ignore_unexpected_invites;
+
+    /**
+     * Specify whether on-demand recording is enabled or not.
+     *
+     * Default: PJ_FALSE
+     */
+     pj_bool_t       enable_rec;
 
 } pjsua_config;
 
