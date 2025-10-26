@@ -2666,6 +2666,13 @@ struct pjsua_msg_data
     pj_str_t    local_uri;
 
     /**
+     * Optional contact URI to be used for this call. If NULL, the contact
+     * will be generated automatically based on the account configuration.
+     * This field is currently used only by pjsua_call_make_call().
+     */
+    pj_str_t    contact_uri;
+
+    /**
      * Additional message headers as linked list. Application can add
      * headers to the list by creating the header, either from the heap/pool
      * or from temporary local variable, and add the header using
@@ -3910,6 +3917,19 @@ typedef struct pjsua_ice_config
      * Default: -1 (maximum not set)
      */
     int                 ice_max_host_cands;
+
+    /**
+     * Number of manual host candidates. This must be equal or less than
+     * \a ice_max_host_cands.
+     */
+    unsigned            ice_manual_host_cnt;
+
+    /**
+     * Optional configuration to manually specify host candidates.
+     * Each candidate will use the same port as the automatic/base host
+     * candidate.
+     */
+    pj_sockaddr         ice_manual_host[PJ_ICE_ST_MAX_CAND];
 
     /**
      * ICE session options.
@@ -6532,6 +6552,18 @@ PJ_DECL(pj_status_t) pjsua_call_dial_dtmf2(pjsua_call_id call_id,
  */
 PJ_DECL(pj_status_t) pjsua_call_send_dtmf(pjsua_call_id call_id, 
                                       const pjsua_call_send_dtmf_param *param);
+
+/**
+ * Get the number of queued DTMF digits for transmission in the call.
+ *
+ * @param call_id       Call identification.
+ * @param digits        On return, will contain the number of DTMF digits
+ *                      queued for transmission.
+ *
+ * @return              PJ_SUCCESS on success, or the appropriate error code.
+ */
+PJ_DECL(pj_status_t) pjsua_call_get_queued_dtmf_digits(pjsua_call_id call_id,
+                                                       unsigned *digits);
 
 /**
  * Send real-time text to remote via RTP stream. This only works if the call
