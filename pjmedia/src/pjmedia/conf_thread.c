@@ -1522,7 +1522,7 @@ static SLOT_TYPE conf_reserve_port(pjmedia_conf *conf)
     if (!pslot)
         return INVALID_SLOT;
 
-    SLOT_TYPE slot = pslot - conf->free_port_slots;
+    SLOT_TYPE slot = (SLOT_TYPE)(pslot - conf->free_port_slots);
     pj_assert( slot < conf->max_ports && conf->ports[slot] == NULL );
     return slot;
 }
@@ -3590,7 +3590,7 @@ static void perform_get_frame(pjmedia_conf *conf)
             }
 
             mix_node = pj_atomic_slist_pop(listener->free_node_cache);
-            pj_assert(mix_node || listener->transmitter_cnt > 1 && conf->is_parallel);
+            pj_assert(mix_node || (listener->transmitter_cnt > 1 && conf->is_parallel));
             pj_assert(conf->is_parallel == (listener->tx_lock != NULL));
             if (mix_node == NULL && listener->tx_lock) {
                 pj_lock_acquire(listener->tx_lock);

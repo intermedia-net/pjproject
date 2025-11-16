@@ -194,7 +194,6 @@ static unsigned atexit_count;
 static void (*atexit_func[32])(void);
 
 static pj_status_t init_mutex(pj_mutex_t *mutex, const char *name, int type);
-
 /*
  * pj_init(void).
  * Init PJLIB!
@@ -459,6 +458,29 @@ PJ_DEF(int) pj_thread_get_prio(pj_thread_t *thread)
 #endif
 }
 
+#if !defined(PJ_ANDROID) || PJ_ANDROID == 0
+static pj_status_t set_prio(pj_thread_t *thread, int prio, 
+                            pj_bool_t max_policy)
+{
+    int policy;
+    int rc;
+    struct sched_param param;
+
+    if (max_policy) {
+        policy = SCHED_RR;
+    } else {
+        rc = pthread_getschedparam (thread->thread, &policy, &param);
+        if (rc != 0)
+            return PJ_RETURN_OS_ERROR(rc);
+    }
+    param.sched_priority = prio;
+    rc = pthread_setschedparam(thread->thread, policy, &param);
+    if (rc != 0)
+        return PJ_RETURN_OS_ERROR(rc);
+
+    return PJ_SUCCESS;    
+}
+#endif /* !PJ_ANDROID */
 
 /*
  * Set the thread priority.
@@ -473,23 +495,15 @@ PJ_DEF(pj_status_t) pj_thread_set_prio(pj_thread_t *thread,  int prio)
     return set_android_thread_priority(prio);
 
 #  else
+    pj_status_t status = PJ_EUNKNOWN;
 
-    struct sched_param param;
-    int policy;
-    int rc;
+    if (prio > 0)
+        status = set_prio(thread, prio, PJ_TRUE);
 
-    rc = pthread_getschedparam (thread->thread, &policy, &param);
-    if (rc != 0)
-        return PJ_RETURN_OS_ERROR(rc);
+    if (status != PJ_SUCCESS)
+        status = set_prio(thread, prio, PJ_FALSE);
 
-    param.sched_priority = prio;
-
-    rc = pthread_setschedparam(thread->thread, policy, &param);
-    if (rc != 0)
-        return PJ_RETURN_OS_ERROR(rc);
-
-    return PJ_SUCCESS;
-
+    return status;
 #  endif /* PJ_ANDROID */
 
 #else
@@ -526,21 +540,40 @@ PJ_DEF(int) pj_thread_get_prio_min(pj_thread_t *thread)
 }
 
 
+static int get_prio_max(pj_thread_t *thread)
+{
+    int ori_policy, policy;
+    int prio;
+    int rc;
+    struct sched_param ori_param, param;
+
+    rc = pthread_getschedparam (thread->thread, &ori_policy, &ori_param);
+    if (rc != 0)
+        return -1;
+ 
+    policy = SCHED_RR;
+    prio = sched_get_priority_max(policy);
+    
+    /* Make sure the priority is usable. */
+    param.sched_priority = prio;
+
+    rc = pthread_setschedparam(thread->thread, policy, &param);
+    if (rc != 0)
+        return sched_get_priority_max(ori_policy);
+    
+    /* Revert the original policy/param. */
+    rc = pthread_setschedparam(thread->thread, ori_policy, &ori_param);
+    return prio;
+}
+
+
 /*
  * Get the highest priority value available on this system.
  */
 PJ_DEF(int) pj_thread_get_prio_max(pj_thread_t *thread)
 {
-    struct sched_param param;
-    int policy;
-    int rc;
-
-    rc = pthread_getschedparam(thread->thread, &policy, &param);
-    if (rc != 0)
-        return -1;
-
 #if defined(_POSIX_PRIORITY_SCHEDULING)
-    return sched_get_priority_max(policy);
+    return get_prio_max(thread);
 #elif defined __OpenBSD__
     /* Thread prio min/max are declared in OpenBSD private hdr */
     return 31;
