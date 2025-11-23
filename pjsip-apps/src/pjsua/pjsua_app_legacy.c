@@ -236,7 +236,7 @@ static void keystroke_help()
     puts("|  a  Answer call              |  i  Send IM              | !a  Modify accnt. |");
     puts("|  h  Hangup call  (ha=all)    |  s  Subscribe presence   | rr  (Re-)register |");
     puts("|  H  Hold call                |  u  Unsubscribe presence | ru  Unregister    |");
-    puts("|  o Toggle call SDP offer     |  D  Subscribe dlg event  |                   |");
+    puts("|  o  Toggle call SDP offer    |  D  Subscribe dlg event  |                   |");
     puts("|                              |  Du Unsub dlg event      |                   |");
     puts("|  v  re-inVite (release hold) |  t  Toggle online status |  >  Cycle next ac.|");
     puts("|  U  send UPDATE              |  T  Set online status    |  <  Cycle prev ac.|");
@@ -1087,11 +1087,6 @@ static void ui_delete_account()
         pjsua_acc_del(i);
         printf("Account %d deleted\n", i);
     }
-}
-
-static void ui_unset_loam_mode()
-{
-    app_config.enable_loam = PJ_FALSE;
 }
 
 static void ui_call_hold()
