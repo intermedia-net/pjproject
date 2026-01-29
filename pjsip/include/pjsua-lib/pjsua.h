@@ -2447,6 +2447,14 @@ typedef struct pjsua_config
      */
      pj_bool_t       enable_rec;
 
+    /**
+    * Don't disconnect the INVITE session after an outgoing request
+    * gets timed out or responded with 408 (request timeout).
+    *
+    * Default is PJ_FALSE.
+    */
+    pj_bool_t        keep_inv_after_tsx_timeout;
+
 } pjsua_config;
 
 

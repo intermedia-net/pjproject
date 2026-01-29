@@ -608,6 +608,7 @@ void SipTransaction::fromPj(pjsip_transaction &tsx)
     this->statusCode    = tsx.status_code;
     this->statusText    = pj2Str(tsx.status_text);
     this->state         = tsx.state;
+    this->cseq          = tsx.cseq;
     if (tsx.last_tx)
         this->lastTx.fromPj(*tsx.last_tx);
     else

@@ -241,6 +241,10 @@ pj_status_t pjsua_call_subsys_init(const pjsua_config *cfg)
     if (pjsua_var.ua_cfg.cb.on_call_rx_reinvite) {
         inv_cb.on_rx_reinvite = &pjsua_call_on_rx_reinvite;
     }
+    if (cfg->keep_inv_after_tsx_timeout) {
+        PJ_LOG(4,(THIS_FILE, "Stop ignoring request timeout"));
+        pjsip_cfg()->endpt.keep_inv_after_tsx_timeout = PJ_TRUE;
+    }
 
     /* Initialize invite session module: */
     status = pjsip_inv_usage_init(pjsua_var.endpt, &inv_cb);

@@ -794,6 +794,14 @@ struct UaConfig : public PersistentObject
      */
     bool                enableRec;
 
+    /**
+     * Don't disconnect the INVITE session after an outgoing request
+     * gets timed out or responded with 408 (request timeout).
+     *
+     * Default is PJ_FALSE.
+     */
+    bool                keepInvAfterTsxTimeout;
+
 public:
     /**
      * Default constructor to initialize with default values.
