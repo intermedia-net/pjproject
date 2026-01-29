@@ -280,6 +280,7 @@ void UaConfig::fromPj(const pjsua_config &ua_cfg)
     this->upnpIfName = pj2Str(ua_cfg.upnp_if_name);
     this->ignoreUnexpectedInvites = PJ2BOOL(ua_cfg.ignore_unexpected_invites);
     this->enableRec = PJ2BOOL(ua_cfg.enable_rec);
+    this->keepInvAfterTsxTimeout = PJ2BOOL(ua_cfg.keep_inv_after_tsx_timeout);
 }
 
 pjsua_config UaConfig::toPj() const
@@ -322,6 +323,7 @@ pjsua_config UaConfig::toPj() const
     pua_cfg.upnp_if_name = str2Pj(this->upnpIfName);
     pua_cfg.ignore_unexpected_invites = this->ignoreUnexpectedInvites;
     pua_cfg.enable_rec = this->enableRec;
+    pua_cfg.keep_inv_after_tsx_timeout = this->keepInvAfterTsxTimeout;
 
     return pua_cfg;
 }

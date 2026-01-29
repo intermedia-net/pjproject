@@ -564,6 +564,7 @@ struct SipTransaction
     /* Transaction identification. */
     pjsip_role_e        role;           /**< Role (UAS or UAC)      */
     string              method;         /**< The method.            */
+    int                 cseq;           /**< The CSeq               */
     
     /* State and status. */
     int                 statusCode;     /**< Last status code seen. */

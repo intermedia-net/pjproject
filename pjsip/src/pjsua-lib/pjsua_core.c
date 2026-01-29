@@ -116,6 +116,7 @@ PJ_DEF(void) pjsua_config_default(pjsua_config *cfg)
     cfg->use_timer = PJSUA_SIP_TIMER_OPTIONAL;
     cfg->ignore_unexpected_invites = PJ_FALSE;
     cfg->enable_rec = PJ_FALSE;
+    cfg->keep_inv_after_tsx_timeout = PJ_FALSE;
     pjsip_timer_setting_default(&cfg->timer_setting);
     pjsua_srtp_opt_default(&cfg->srtp_opt);
 }
