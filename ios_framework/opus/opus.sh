@@ -6,7 +6,7 @@
 ###########################################################################
 #  Change values here                                                     #
 #                                                                         #
-VERSION="1.3.1"   
+VERSION="1.6.1"
 if test "x${MIN_IOS_VERSION}" = "x"; then
   MIN_IOS_VERSION="14.0"
   echo "$F: MIN_IOS_VERSION is not specified, using ${MIN_IOS_VERSION}"
@@ -56,7 +56,7 @@ set -e
 
 if [ ! -e opus-${VERSION}.tar.gz ]; then
     echo "Downloading opus-${VERSION}.tar.gz"
-    curl -O -L -s https://archive.mozilla.org/pub/opus/opus-${VERSION}.tar.gz
+    curl -O -L -s https://downloads.xiph.org/releases/opus/opus-$VERSION.tar.gz
 else
     echo "Using opus-${VERSION}.tar.gz"
 fi
