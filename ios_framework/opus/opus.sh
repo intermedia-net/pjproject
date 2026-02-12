@@ -73,7 +73,7 @@ if [[ "${ARCH}" == "x86_64" ]];
 then
     HOST=x86_64-apple-darwin
 else 
-    HOST=arm-apple-darwin 
+    HOST=aarch64-apple-darwin
 fi
 
 if [[ "${SDK}" == "iphonesimulator" ]];
