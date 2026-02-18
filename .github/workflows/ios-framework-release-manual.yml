@@ -1,9 +1,6 @@
-name: iOS framework build
+name: iOS framework build (manual)
 
 on:
-  push:
-    tags:
-      - "*"
   workflow_dispatch:
     inputs:
       tag:
@@ -12,6 +9,8 @@ on:
         type: string
 
 env:
+  # There is a tie-in in "Build framework" because we need to cd into ios_framework
+  # If we ever change this we need to update that step as well
   OUTPUT_DIR: ios_framework/artifact
 
 jobs:
@@ -25,7 +24,6 @@ jobs:
         uses: actions/checkout@v4
 
       # Decide what "version string" to use for naming the zip.
-      # - push tag: github.ref_name
       # - manual with inputs.tag: that tag
       # - manual without tag: a unique run-based value, and NO release updates
       - name: Compute version/tag
@@ -34,20 +32,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            ver="${{ github.ref_name }}"
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            ver="${{ inputs.tag }}"
             do_release="true"
-            release_tag="${{ github.ref_name }}"
+            release_tag="${{ inputs.tag }}"
           else
-            if [[ -n "${{ inputs.tag }}" ]]; then
-              ver="${{ inputs.tag }}"
-              do_release="true"
-              release_tag="${{ inputs.tag }}"
-            else
-              ver="manual-${{ github.run_number }}-${{ github.run_attempt }}"
-              do_release="false"
-              release_tag=""
-            fi
+            ver="manual-${{ github.run_number }}-${{ github.run_attempt }}"
+            do_release="false"
+            release_tag=""
           fi
 
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
@@ -55,11 +47,6 @@ jobs:
           echo "zip_path=${{ env.OUTPUT_DIR }}/pjsip-ios-$ver.zip" >> "$GITHUB_OUTPUT"
           echo "do_release=$do_release" >> "$GITHUB_OUTPUT"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-
-      - name: Clean output folder
-        run: |
-          rm -rf "${{ env.OUTPUT_DIR }}"
-          mkdir -p "${{ env.OUTPUT_DIR }}"
 
       - name: Build framework
         run: |
@@ -69,13 +56,6 @@ jobs:
             --output-dir="$PWD/artifact" \
             --name="pjsip-ios-${{ steps.meta.outputs.ver }}"
 
-      - name: Verify expected zip exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          ls -la "${{ env.OUTPUT_DIR }}"
-          test -f "${{ steps.meta.outputs.zip_path }}"
-
       - name: Upload build artifact (manual runs without tag)
         if: ${{ steps.meta.outputs.do_release == 'false' }}
         uses: actions/upload-artifact@v4
@@ -84,7 +64,7 @@ jobs:
           path: ${{ steps.meta.outputs.zip_path }}
           if-no-files-found: error
 
-      - name: Publish / update GitHub release (tag builds or manual runs with tag)
+      - name: Publish / update GitHub release (manual runs with tag)
         if: ${{ steps.meta.outputs.do_release == 'true' }}
         uses: ncipollo/release-action@v1
         with:
