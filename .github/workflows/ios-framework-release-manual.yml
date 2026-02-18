@@ -1,0 +1,75 @@
+name: iOS framework build (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional. If set, update/create the GitHub Release for this tag. If empty, no release is modified."
+        required: false
+        type: string
+
+env:
+  # There is a tie-in in "Build framework" because we need to cd into ios_framework
+  # If we ever change this we need to update that step as well
+  OUTPUT_DIR: ios_framework/artifact
+
+jobs:
+  build-ios-framework:
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Decide what "version string" to use for naming the zip.
+      # - manual with inputs.tag: that tag
+      # - manual without tag: a unique run-based value, and NO release updates
+      - name: Compute version/tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            ver="${{ inputs.tag }}"
+            do_release="true"
+            release_tag="${{ inputs.tag }}"
+          else
+            ver="manual-${{ github.run_number }}-${{ github.run_attempt }}"
+            do_release="false"
+            release_tag=""
+          fi
+
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "zip_name=pjsip-ios-$ver.zip" >> "$GITHUB_OUTPUT"
+          echo "zip_path=${{ env.OUTPUT_DIR }}/pjsip-ios-$ver.zip" >> "$GITHUB_OUTPUT"
+          echo "do_release=$do_release" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build framework
+        run: |
+          cd ios_framework
+          ./build_ios_framework.sh \
+            --source-dir="${{ github.workspace }}" \
+            --output-dir="$PWD/artifact" \
+            --name="pjsip-ios-${{ steps.meta.outputs.ver }}"
+
+      - name: Upload build artifact (manual runs without tag)
+        if: ${{ steps.meta.outputs.do_release == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.zip_name }}
+          path: ${{ steps.meta.outputs.zip_path }}
+          if-no-files-found: error
+
+      - name: Publish / update GitHub release (manual runs with tag)
+        if: ${{ steps.meta.outputs.do_release == 'true' }}
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.meta.outputs.release_tag }}
+          artifacts: ${{ steps.meta.outputs.zip_path }}
+          allowUpdates: true
+          omitNameDuringUpdate: true
+          replacesArtifacts: true
