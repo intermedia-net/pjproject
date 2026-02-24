@@ -192,52 +192,33 @@ jobs:
         with:
           ref: ${{ needs.prepare-release.outputs.branch_to_setup_release }}
 
-      - name: Create PR (if not exists)
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
+      - name: Create PR with GitHub CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          headBranch="${{ needs.prepare-release.outputs.branch_to_setup_release }}"
+          baseBranch="${{ github.ref_name }}"
+          reviewer="${{ github.actor }}"
 
-            const headBranch = `${{ needs.prepare-release.outputs.branch_to_setup_release }}`;
-            const baseBranch = `${{ github.ref_name }}`;
-            const reviewer = `${{ github.actor }}`; // workflow_dispatch user
+          title="Release ${{ needs.prepare-release.outputs.version }}"
+          body="Automated PR to merge \`${headBranch}\` into \`${baseBranch}\`.
 
-            const head = `${owner}:${headBranch}`;
+          Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-            // Find existing open PR
-            const existing = await github.rest.pulls.list({
-              owner, repo, state: "open", head, base: baseBranch
-            });
+          # Optional: avoid failing if PR already exists (same head/base)
+          existing_url="$(gh pr list --state open --head "$headBranch" --base "$baseBranch" --json url --jq '.[0].url // ""')"
+          if [ -n "$existing_url" ]; then
+            echo "PR already exists: $existing_url"
+            exit 0
+          fi
 
-            let pr;
-            if (existing.data.length > 0) {
-              pr = existing.data[0];
-              core.info(`PR already exists: ${pr.html_url}`);
-            } else {
-              const created = await github.rest.pulls.create({
-                owner, repo,
-                head: headBranch,
-                base: baseBranch,
-                title: `Release ${{ needs.prepare-release.outputs.version }}`,
-                body: `Automated PR to merge \`${headBranch}\` into \`${baseBranch}\`.\n\nWorkflow run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
-                draft: false
-              });
-              pr = created.data;
-              core.info(`Created PR: ${pr.html_url}`);
-            }
-
-            // Request reviewer (best effort, might fail if actor is a bot or not eligible)
-            try {
-              await github.rest.pulls.requestReviewers({
-                owner, repo,
-                pull_number: pr.number,
-                reviewers: [reviewer],
-              });
-              core.info(`Requested reviewer: ${reviewer}`);
-            } catch (e) {
-              core.warning(`Could not request reviewer '${reviewer}': ${e.message}`);
-            }
+          gh pr create \
+            --head "$headBranch" \
+            --base "$baseBranch" \
+            --reviewer "$reviewer" \
+            --title "$title" \
+            --body "$body" \
+            --draft=false
 
       - name: Update GitHub release to final
         uses: ncipollo/release-action@v1
