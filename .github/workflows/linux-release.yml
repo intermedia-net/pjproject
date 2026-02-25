@@ -1,9 +1,16 @@
 name: Linux release
 
 on:
-  push:
-    tags:
-      - '*'
+  workflow_call:
+    inputs:
+      branch:
+        description: "Branch name to checkout and build (e.g. release/1.2.3-4)"
+        required: true
+        type: string
+      tag:
+        description: "Tag name to id the GitHub release (e.g. 1.2.3-4)"
+        required: true
+        type: string
 
 env:
   RELEASE_ARCHIVE_NAME: linux-release
@@ -19,22 +26,35 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: '3.10'
+
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Print version.mak
+        shell: bash
+        run: |
+          echo "=== version.mak ==="
+          cat version.mak
+
       - name: Build
         run: |
           cd build-scripts
           sudo ./build
+
       - name: Archive artifacts
         if: always()
         run: |
           tar -czvf "$RELEASE_ARCHIVE_NAME".tar.gz -C build-scripts/work/result .
+
       - name: Publish release
         if: always()
         id: update_release
         uses: ncipollo/release-action@v1
         with:
-          tag: ${{ github.ref_name }}
+          tag: ${{ inputs.tag }}
           artifacts: ${{ env.RELEASE_ARCHIVE_NAME }}.tar.gz
           allowUpdates: true
           omitNameDuringUpdate: true
+          omitDraftDuringUpdate: true

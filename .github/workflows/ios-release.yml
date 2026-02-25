@@ -1,0 +1,99 @@
+name: iOS release
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        description: "Branch name to checkout and build (e.g. release/1.2.3-4)"
+        required: true
+        type: string
+      tag:
+        description: "Tag name to id the GitHub release (e.g. 1.2.3-4)"
+        required: true
+        type: string
+
+jobs:
+  build-ios-framework:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Compute metadata from tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ inputs.tag }}"
+          framework_name="pjsip-ios-${version}"
+
+          build_script_path="ios_framework"
+          build_script_output_dir="artifact"
+
+          zip_name="${framework_name}.zip"
+          zip_parent_path="${build_script_path}/${build_script_output_dir}"
+          zip_path="${zip_parent_path}/${zip_name}"
+
+          {
+            echo "version=$version"
+            echo "framework_name=$framework_name"
+            echo "build_script_path=$build_script_path"
+            echo "build_script_output_dir=$build_script_output_dir"
+            echo "zip_name=$zip_name"
+            echo "zip_path=$zip_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Print version.mak
+        shell: bash
+        run: |
+          echo "=== version.mak ==="
+          cat version.mak
+
+      - name: Build framework
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ steps.meta.outputs.build_script_path }}"
+          ./build_ios_framework.sh \
+            --source-dir="${{ github.workspace }}" \
+            --output-dir="$PWD/${{ steps.meta.outputs.build_script_output_dir }}" \
+            --name="${{ steps.meta.outputs.framework_name }}"
+
+      - name: Update Package.swift binaryTarget URL + checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          checksum="$(swift package compute-checksum "${{ steps.meta.outputs.zip_path }}")"
+          echo "checksum=${checksum}"
+
+          sed -i '' -E \
+            -e 's|^[[:space:]]*url:[[:space:]]*"https://github\.com/[^/"]+/[^/"]+/releases/download/[^"]+/[^"]+"[[:space:]]*,[[:space:]]*$|            url: "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ steps.meta.outputs.zip_name }}",|' \
+            -e "s|^[[:space:]]*checksum:[[:space:]]*\"[^\"]+\"[[:space:]]*$|            checksum: \"${checksum}\"|" \
+            Package.swift
+
+      - name: Configure Git author
+        uses: Homebrew/actions/git-user-config@main
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git commit -a -m "Prepare ${{ steps.meta.outputs.version }} release: set Package.swift url and checksum"
+          git push origin HEAD
+
+      - name: Publish release
+        id: update_release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ inputs.tag }}
+          artifacts: ${{ steps.meta.outputs.zip_path }}
+          allowUpdates: true
+          omitNameDuringUpdate: true
+          omitDraftDuringUpdate: true

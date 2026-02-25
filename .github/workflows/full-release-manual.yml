@@ -1,0 +1,230 @@
+name: Full Release (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Update/create the GitHub Release for this tag (e.g. 1.2.3-4)"
+        required: true
+        type: string
+
+jobs:
+  prepare-release:
+    name: Prepare Release
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      branch_to_setup_release: ${{ steps.meta.outputs.branch_to_setup_release }}
+    steps:
+      - name: Compute version/tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ inputs.tag }}"
+          release_tag="${{ inputs.tag }}"
+          branch_to_setup_release="release/${{ inputs.tag }}"
+
+          echo "version=$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          echo "release_tag=$release_tag"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+          echo "branch_to_setup_release=$branch_to_setup_release"
+          echo "branch_to_setup_release=$branch_to_setup_release" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Checkout or create branch to setup release
+        run: |
+          if git ls-remote --exit-code --heads origin ${{ steps.meta.outputs.branch_to_setup_release }}; then
+            git fetch origin ${{ steps.meta.outputs.branch_to_setup_release }}:${{ steps.meta.outputs.branch_to_setup_release }}
+            git checkout ${{ steps.meta.outputs.branch_to_setup_release }}
+          else
+            git checkout -b ${{ steps.meta.outputs.branch_to_setup_release }}
+          fi
+
+      - name: Update built-in versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.meta.outputs.version }}"
+
+          # Expect: M.m.r-suffix (suffix optional); capture suffix WITHOUT the leading "-"
+          if [[ "${version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-([^-].*))?$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            revision="${BASH_REMATCH[3]}"
+            suffix="${BASH_REMATCH[5]:-}"   # <-- no leading "-" now
+          else
+            echo "ERROR: VERSION must look like '2.14.1-23' (got: '${version}')"
+            exit 1
+          fi
+          
+          # config.h stores EXTRA as a C string literal, e.g. "23" or ""
+          if [[ -n "${suffix}" ]]; then
+            extra="\"${suffix}\""
+          else
+            extra="\"\""
+          fi
+
+          echo "Updating to VERSION=${version}"
+          echo "MAJOR=${major} MINOR=${minor} REV=${revision} SUFFIX='${suffix}' EXTRA=${extra}"
+
+          # 1) Update root version.mak
+          sed -i -E \
+            -e "s/^(export[[:space:]]+PJ_VERSION_MAJOR[[:space:]]*:=)[[:space:]]*[0-9]+$/\1 ${major}/" \
+            -e "s/^(export[[:space:]]+PJ_VERSION_MINOR[[:space:]]*:=)[[:space:]]*[0-9]+$/\1 ${minor}/" \
+            -e "s/^(export[[:space:]]+PJ_VERSION_REV[[:space:]]*:=)[[:space:]]*[0-9]+$/\1 ${revision}/" \
+            -e "s/^(export[[:space:]]+PJ_VERSION_SUFFIX[[:space:]]*:=).*/\1 ${suffix}/" \
+            version.mak
+
+          # 2) Update pjlib/include/pj/config.h
+          sed -i -E \
+            -e "s/^(#define[[:space:]]+PJ_VERSION_NUM_MAJOR)[[:space:]]+[0-9]+$/\1    ${major}/" \
+            -e "s/^(#define[[:space:]]+PJ_VERSION_NUM_MINOR)[[:space:]]+[0-9]+$/\1    ${minor}/" \
+            -e "s/^(#define[[:space:]]+PJ_VERSION_NUM_REV)[[:space:]]+[0-9]+$/\1      ${revision}/" \
+            -e "s/^(#define[[:space:]]+PJ_VERSION_NUM_EXTRA)[[:space:]]+\".*\"$/\1\t${extra}/" \
+            pjlib/include/pj/config.h
+
+      - name: Configure Git author
+        uses: Homebrew/actions/git-user-config@main
+
+      - name: Commit changes
+        id: pre_release
+        run: |
+          git commit -a -m "Prepare ${{ steps.meta.outputs.version }} release: set version.mak and config.h versions to ${{ steps.meta.outputs.version }}"
+          git push origin HEAD
+
+      - name: Create GitHub draft release and git tag
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.meta.outputs.release_tag }}
+          allowUpdates: true
+          omitNameDuringUpdate: true
+          replacesArtifacts: true
+          draft: true
+
+  call-ios-release:
+    needs:
+      - prepare-release
+    uses: ./.github/workflows/ios-release.yml
+    with:
+      branch: ${{ needs.prepare-release.outputs.branch_to_setup_release }}
+      tag: ${{ needs.prepare-release.outputs.release_tag }}
+
+  call-macos-arm64-release:
+    needs:
+      - prepare-release
+    uses: ./.github/workflows/macos-arm64-release.yml
+    with:
+      branch: ${{ needs.prepare-release.outputs.branch_to_setup_release }}
+      tag: ${{ needs.prepare-release.outputs.release_tag }}
+
+  call-macos-x86-release:
+    needs:
+      - prepare-release
+    uses: ./.github/workflows/macos-x86-release.yml
+    with:
+      branch: ${{ needs.prepare-release.outputs.branch_to_setup_release }}
+      tag: ${{ needs.prepare-release.outputs.release_tag }}
+
+  call-linux-release:
+    needs:
+      - prepare-release
+    uses: ./.github/workflows/linux-release.yml
+    with:
+      branch: ${{ needs.prepare-release.outputs.branch_to_setup_release }}
+      tag: ${{ needs.prepare-release.outputs.release_tag }}
+
+  call-android-release:
+    needs:
+      - prepare-release
+    uses: ./.github/workflows/android-release.yml
+    with:
+      branch: ${{ needs.prepare-release.outputs.branch_to_setup_release }}
+      tag: ${{ needs.prepare-release.outputs.release_tag }}
+
+  required-releases:
+    needs:
+      - call-android-release
+      - call-ios-release
+      - call-macos-arm64-release
+      - call-linux-release
+    runs-on: ubuntu-slim
+    steps:
+      - name: Wait for required releases to finish successfully
+        run: echo "Required releases finished"
+
+  optional-releases:
+    if: ${{ always() }}
+    needs:
+      # only used by our mock sip server, not really required
+      - call-macos-x86-release
+    runs-on: ubuntu-slim
+    steps:
+      - name: Wait for optional releases to finish (either successfully or not)
+        run: echo "Optional releases finished (either successfully or not)"
+
+  finalize-release:
+    name: Finalize Release
+    needs:
+      - prepare-release
+      - required-releases
+      - optional-releases
+    if: ${{ always() && needs.prepare-release.result == 'success' && needs.required-releases.result == 'success' }}
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.branch_to_setup_release }}
+
+      - name: Create PR with GitHub CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          headBranch="${{ needs.prepare-release.outputs.branch_to_setup_release }}"
+          baseBranch="${{ github.ref_name }}"
+          reviewer="${{ github.actor }}"
+
+          title="Release ${{ needs.prepare-release.outputs.version }}"
+          body="Automated PR to merge \`${headBranch}\` into \`${baseBranch}\`.
+
+          Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # Optional: avoid failing if PR already exists (same head/base)
+          existing_url="$(gh pr list --state open --head "$headBranch" --base "$baseBranch" --json url --jq '.[0].url // ""')"
+          if [ -n "$existing_url" ]; then
+            echo "PR already exists: $existing_url"
+            exit 0
+          fi
+
+          gh pr create \
+            --head "$headBranch" \
+            --base "$baseBranch" \
+            --reviewer "$reviewer" \
+            --title "$title" \
+            --body "$body" \
+            --draft=false
+
+      - name: Update GitHub release to final
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ needs.prepare-release.outputs.release_tag }}
+          commit: ${{ needs.prepare-release.outputs.branch_to_setup_release }}
+          allowUpdates: true
+          omitNameDuringUpdate: true
+          draft: false
