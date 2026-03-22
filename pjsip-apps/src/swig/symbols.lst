@@ -15,13 +15,13 @@ pjmedia/format.h                pjmedia_format_id
 pjmedia/frame.h                 pjmedia_frame_type
 pjmedia/jbuf.h                  pjmedia_jb_discard_algo
 pjmedia/rtcp_fb.h               pjmedia_rtcp_fb_type
-pjmedia/tonegen.h               pjmedia_tone_digit pjmedia_tone_digit_map pjmedia_tone_desc
 pjmedia/transport_srtp.h        pjmedia_srtp_use pjmedia_srtp_crypto_option pjmedia_srtp_keying_method
 pjmedia/types.h                 pjmedia_type pjmedia_dir pjmedia_tp_proto pjmedia_orient
 pjmedia/videodev.h              pjmedia_vid_dev_hwnd_type
 pjmedia/vid_codec.h             pjmedia_vid_packing
 pjmedia/vid_conf.h              pjmedia_vid_conf_op_type
 pjmedia/vid_stream.h            pjmedia_vid_stream_rc_method
+pjmedia/ai_port.h               pjmedia_ai_event_type
 pjmedia/wav_port.h              pjmedia_file_writer_option pjmedia_file_player_option
 
 pjmedia-audiodev/audiodev.h     pjmedia_aud_dev_route pjmedia_aud_dev_cap
