@@ -1,0 +1,4 @@
+metadata:
+  name: pjproject
+  labels:
+    distributed-in-customer-device: "true"
