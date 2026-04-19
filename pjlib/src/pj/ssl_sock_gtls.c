@@ -1184,18 +1184,34 @@ static pj_status_t ssl_do_handshake(pj_ssl_sock_t *ssock)
     int ret;
     pj_status_t status;
 
-    /* Perform SSL handshake */
+    /* Perform SSL handshake.
+     * Hold write_mutex to prevent concurrent session access from
+     * read and write callbacks (ioqueue may fire them in parallel).
+     */
+    pj_lock_acquire(ssock->write_mutex);
     ret = gnutls_handshake(gssock->session);
+    pj_lock_release(ssock->write_mutex);
 
     if (ret == GNUTLS_E_SUCCESS) {
         /* System are GO */
         ssock->ssl_state = SSL_STATE_ESTABLISHED;
         status = PJ_SUCCESS;
-    } else if (!gnutls_error_is_fatal(ret)) {
-        /* Non fatal error, retry later (busy or again) */
+    } else if (!gnutls_error_is_fatal(ret) ||
+               ret == GNUTLS_E_GOT_APPLICATION_DATA)
+    {
+        /* Non fatal error, retry later (busy or again).
+         * GNUTLS_E_GOT_APPLICATION_DATA means the peer sent application
+         * data while we expected handshake records (common during
+         * renegotiation).  The app data sits in GnuTLS's internal record
+         * buffer and will be returned by the next gnutls_record_recv().
+         * Treat it as non-fatal so the caller retries after draining the
+         * buffered application data.
+         */
         status = PJ_EPENDING;
     } else {
         /* Fatal error invalidates session, no fallback */
+        PJ_LOG(1, ("tls", "gnutls_handshake() error: %s (%d)",
+                   gnutls_strerror(ret), ret));
         status = PJ_EINVAL;
     }
 
@@ -1210,8 +1226,14 @@ static pj_status_t ssl_read(pj_ssl_sock_t *ssock, void *data, int *size)
     int decrypted_size;
 
     /* Decrypt received data using GnuTLS (will read our input
-     * circular buffer) */
+     * circular buffer).
+     * Hold write_mutex because gnutls_record_recv() may produce
+     * handshake data during renegotiation (same as OpenSSL's
+     * SSL_read approach).
+     */
+    pj_lock_acquire(ssock->write_mutex);
     decrypted_size = gnutls_record_recv(gssock->session, data, *size);
+    pj_lock_release(ssock->write_mutex);
     *size = 0;
     if (decrypted_size > 0) {
         *size = decrypted_size;
@@ -1280,22 +1302,25 @@ static pj_status_t ssl_renegotiate(pj_ssl_sock_t *ssock)
     gnutls_sock_t *gssock = (gnutls_sock_t *)ssock;
     int status;
 
-    /* First call gnutls_rehandshake() to see if this is even possible */
-    status = gnutls_rehandshake(gssock->session);
-
-    if (status == GNUTLS_E_SUCCESS) {
-        /* Rehandshake is possible, so try a GnuTLS handshake now. The eventual
-         * gnutls_record_recv() calls could return a few specific values during
-         * this state:
-         *
-         *   - GNUTLS_E_REHANDSHAKE: rehandshake message processing
-         *   - GNUTLS_E_WARNING_ALERT_RECEIVED: client does not wish to
-         *                                      renegotiate
+    if (!ssock->is_server) {
+        /* GnuTLS does not support client-initiated renegotiation.
+         * gnutls_rehandshake() is server-only (sends HelloRequest),
+         * and gnutls_handshake() on an established session fails.
          */
-        return PJ_SUCCESS;
-    } else {
-        return tls_status_from_err(ssock, status);
+        return PJ_ENOTSUP;
     }
+
+    /* Server: send HelloRequest to ask client to renegotiate.
+     * Hold write_mutex for session access consistency with
+     * ssl_do_handshake() and ssl_read().
+     */
+    pj_lock_acquire(ssock->write_mutex);
+    status = gnutls_rehandshake(gssock->session);
+    pj_lock_release(ssock->write_mutex);
+    if (status == GNUTLS_E_SUCCESS)
+        return PJ_SUCCESS;
+
+    return tls_status_from_err(ssock, status);
 }
 
 #endif /* PJ_HAS_SSL_SOCK */
