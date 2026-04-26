@@ -57,8 +57,11 @@ static void usage(void)
     puts  ("  --password=string   Set authentication password");
 
 #if PJSIP_HAS_DIGEST_AKA_AUTH
-    puts  ("  --aka-op=hex        Set OP value to use in Digest AKA authentication");
-    puts  ("  --aka-amf=hex       Set AMF value to use in Digest AKA authentication");
+    puts  ("  --aka-op=hex        Set OP value for Digest AKA authentication.");
+    puts  ("                      Specifying --aka-op or --aka-amf switches the");
+    puts  ("                      current credential to AKA mode (K is taken from");
+    puts  ("                      --password).");
+    puts  ("  --aka-amf=hex       Set AMF value for Digest AKA authentication");
 #endif
 
     puts  ("  --contact=url       Optionally override the Contact information");
@@ -175,6 +178,10 @@ static void usage(void)
     puts  ("  --no-tones          Disable audible tones");
     puts  ("  --jb-max-size       Specify jitter buffer maximum size, in msec (default=-1)");
     puts  ("  --extra-audio       Add one more audio stream");
+#if !PJSUA_MEDIA_HAS_PJMEDIA
+    puts  ("  --custom-sdp=STR    Replace generated SDP with this string.");
+    puts  ("                      Use \\r\\n or \\n as line separators. The full SDP is replaced as-is.");
+#endif
 
 #if PJSUA_HAS_VIDEO
     puts  ("");
@@ -422,6 +429,9 @@ static pj_status_t parse_args(int argc, char *argv[],
            OPT_VCAPTURE_DEV, OPT_VRENDER_DEV, OPT_PLAY_AVI, OPT_AUTO_PLAY_AVI,
            OPT_REC_AVI, OPT_REC_AVI_SIZE, OPT_REC_AVI_AUDIO, OPT_AUTO_REC_AVI,
            OPT_USE_CLI, OPT_CLI_TELNET_PORT, OPT_DISABLE_CLI_CONSOLE
+#if !PJSUA_MEDIA_HAS_PJMEDIA
+           , OPT_CUSTOM_SDP
+#endif
     };
     struct pj_getopt_option long_options[] = {
         { "config-file",1, 0, OPT_CONFIG_FILE},
@@ -578,6 +588,9 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "use-cli",    0, 0, OPT_USE_CLI},
         { "cli-telnet-port", 1, 0, OPT_CLI_TELNET_PORT},
         { "no-cli-console", 0, 0, OPT_DISABLE_CLI_CONSOLE},
+#if !PJSUA_MEDIA_HAS_PJMEDIA
+        { "custom-sdp",     1, 0, OPT_CUSTOM_SDP},
+#endif
         { NULL, 0, 0, 0}
     };
     pj_status_t status;
@@ -938,12 +951,9 @@ static pj_status_t parse_args(int argc, char *argv[],
         case OPT_PASSWORD:   /* authentication password */
             cur_acc->cred_info[cur_acc->cred_count].data_type = PJSIP_CRED_DATA_PLAIN_PASSWD;
             cur_acc->cred_info[cur_acc->cred_count].data = pj_str(pj_optarg);
-#if PJSIP_HAS_DIGEST_AKA_AUTH
-            cur_acc->cred_info[cur_acc->cred_count].data_type |= PJSIP_CRED_DATA_EXT_AKA;
-            cur_acc->cred_info[cur_acc->cred_count].ext.aka.k = pj_str(pj_optarg);
-            cur_acc->cred_info[cur_acc->cred_count].ext.aka.cb = &pjsip_auth_create_aka_response;
             break;
 
+#if PJSIP_HAS_DIGEST_AKA_AUTH
         case OPT_AKA_OP:    /* aka op */
             {
                 pj_str_t hex = pj_str(pj_optarg);
@@ -980,8 +990,8 @@ static pj_status_t parse_args(int argc, char *argv[],
                     return PJ_EINVAL;
                 }
             }
-#endif
             break;
+#endif
 
         case OPT_REG_RETRY_INTERVAL:
             cur_acc->reg_retry_interval = (unsigned)pj_strtoul(pj_cstr(&tmp, pj_optarg));
@@ -1609,6 +1619,38 @@ static pj_status_t parse_args(int argc, char *argv[],
             cfg->cli_cfg.cli_fe &= (~CLI_FE_CONSOLE);
             break;
 
+#if !PJSUA_MEDIA_HAS_PJMEDIA
+        case OPT_CUSTOM_SDP:
+        {
+            /* Unescape \r\n and \n in the option value so the user can
+             * pass the SDP as a single command-line argument.
+             */
+            const char *src = pj_optarg;
+            char *dst;
+            pj_size_t len = pj_ansi_strlen(pj_optarg);
+
+            cfg->custom_sdp.ptr = (char*)pj_pool_alloc(cfg->pool, len + 1);
+            dst = cfg->custom_sdp.ptr;
+            while (*src) {
+                if (src[0] == '\\' && src[1] == 'r' && src[2] == '\\' &&
+                    src[3] == 'n')
+                {
+                    *dst++ = '\r';
+                    *dst++ = '\n';
+                    src += 4;
+                } else if (src[0] == '\\' && src[1] == 'n') {
+                    *dst++ = '\n';
+                    src += 2;
+                } else {
+                    *dst++ = *src++;
+                }
+            }
+            *dst = '\0';
+            cfg->custom_sdp.slen = (pj_ssize_t)(dst - cfg->custom_sdp.ptr);
+            break;
+        }
+#endif /* !PJSUA_MEDIA_HAS_PJMEDIA */
+
         default:
             PJ_LOG(1,(THIS_FILE,
                       "Argument \"%s\" is not valid. Use --help to see help",
@@ -1658,6 +1700,32 @@ static pj_status_t parse_args(int argc, char *argv[],
         {
             acfg->cred_count++;
         }
+
+#if PJSIP_HAS_DIGEST_AKA_AUTH
+        /* Promote credentials to AKA if --aka-op or --aka-amf was supplied.
+         * Order-independent: --aka-op/--aka-amf may appear before or after
+         * --password on the command line. K is taken from the password, so
+         * --password is required for AKA — skip promotion if it's missing
+         * rather than silently running AKA with an all-zero K.
+         */
+        {
+            unsigned j;
+            for (j=0; j<acfg->cred_count; ++j) {
+                pjsip_cred_info *c = &acfg->cred_info[j];
+                if (c->ext.aka.op.slen || c->ext.aka.amf.slen) {
+                    if (c->data.slen == 0) {
+                        PJ_LOG(1,(THIS_FILE,
+                                  "Error: --aka-op/--aka-amf requires "
+                                  "--password (used as AKA K)"));
+                        return PJ_EINVAL;
+                    }
+                    c->data_type |= PJSIP_CRED_DATA_EXT_AKA;
+                    c->ext.aka.k = c->data;
+                    c->ext.aka.cb = &pjsip_auth_create_aka_response;
+                }
+            }
+        }
+#endif
 
         if (acfg->ice_cfg.enable_ice) {
             acfg->ice_cfg_use = PJSUA_ICE_CONFIG_USE_CUSTOM;
@@ -2557,6 +2625,40 @@ int write_settings(pjsua_app_config *config, char *buf, pj_size_t max)
                               config->cfg.timer_setting.sess_expires);
         pj_strcat2(&cfg, line);
     }
+
+#if !PJSUA_MEDIA_HAS_PJMEDIA
+    if (config->custom_sdp.slen) {
+        /* Escape actual CRLF/LF back to \r\n/\n when saving */
+        const char *src = config->custom_sdp.ptr;
+        const char *end = src + config->custom_sdp.slen;
+        pj_str_t escaped;
+        char *ebuf;
+        char *ep;
+
+        /* Worst case: every byte becomes 4 chars (\r\n) */
+        ebuf = (char*)pj_pool_alloc(config->pool,
+                                    (pj_size_t)(config->custom_sdp.slen * 4 + 1));
+        ep = ebuf;
+        while (src < end) {
+            if (src[0] == '\r' && src + 1 < end && src[1] == '\n') {
+                *ep++ = '\\'; *ep++ = 'r'; *ep++ = '\\'; *ep++ = 'n';
+                src += 2;
+            } else if (src[0] == '\n') {
+                *ep++ = '\\'; *ep++ = 'n';
+                src++;
+            } else {
+                *ep++ = *src++;
+            }
+        }
+        *ep = '\0';
+        escaped.ptr = ebuf;
+        escaped.slen = (pj_ssize_t)(ep - ebuf);
+
+        pj_strcat2(&cfg, "--custom-sdp \"");
+        pj_strcat(&cfg, &escaped);
+        pj_strcat2(&cfg, "\"\n");
+    }
+#endif /* !PJSUA_MEDIA_HAS_PJMEDIA */
 
     *(cfg.ptr + cfg.slen) = '\0';
     return (int)cfg.slen;
