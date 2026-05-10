@@ -409,6 +409,17 @@ typedef struct pj_stun_resolve_result pj_stun_resolve_result;
 
 
 /**
+ * Default value for account-scoped server affinity. See
+ * #pjsua_acc_config.server_affinity for details.
+ *
+ * Default: 0 (disabled)
+ */
+#ifndef PJSUA_ACC_SERVER_AFFINITY_DEFAULT
+#   define PJSUA_ACC_SERVER_AFFINITY_DEFAULT    0
+#endif
+
+
+/**
  * Specify whether pjsua should disable automatically sending initial
  * answer 100/Trying for incoming calls. If disabled, application can
  * later send 100/Trying if it wishes using pjsua_call_answer().
@@ -700,6 +711,20 @@ typedef struct pjsua_on_stream_created_param
      * On input, it specifies the audio media port of the stream. Application
      * may modify this pointer to point to different media port to be
      * registered to the conference bridge.
+     *
+     * \warning
+     * If the substituted port retains a pointer to the original audio
+     * stream port (e.g. a DSP wrapper around it), the application must
+     * take a reference on the inner port's group lock at construction
+     * (pj_grp_lock_add_ref() on the original port->grp_lock) and release
+     * it from the wrapper's on_destroy(). Otherwise
+     * pjmedia_stream_destroy(), which PJSUA calls unconditionally at
+     * call teardown, may free the inner port while the conference bridge
+     * is still iterating over the wrapper. The substituted port also
+     * needs its own pool released from on_destroy(); set
+     * #pjsua_on_stream_created_param::destroy_port to PJ_TRUE so PJSUA
+     * fires the destroy chain. See "Customizing the Audio Stream Port"
+     * in the docs guide for the full contract.
      */
     pjmedia_port        *port;
 
@@ -1411,7 +1436,18 @@ typedef struct pjsua_callback
      * This media port then will be added to the conference bridge instead.
      *
      * Note: if implemented, on_stream_created2() callback will be called
-     * instead of this one. 
+     * instead of this one.
+     *
+     * \warning
+     * Same lifetime contract as on_stream_created2(): if the substituted
+     * port wraps the original audio stream port, the wrapper must pin
+     * the inner port via pj_grp_lock_add_ref() on (*p_port)->grp_lock at
+     * construction and release it from on_destroy(). This callback has
+     * no #pjsua_on_stream_created_param::destroy_port equivalent, so the
+     * application must call pjmedia_port_destroy() on the substituted
+     * port itself (e.g. from on_stream_destroyed()) so the destroy
+     * chain fires. Prefer on_stream_created2() for new code. See
+     * "Customizing the Audio Stream Port" in the docs guide.
      *
      * @param call_id       Call identification.
      * @param strm          Audio media stream.
@@ -1431,6 +1467,20 @@ typedef struct pjsua_callback
      * registered to the conference bridge. Application may return different
      * audio media port if it has added media processing port to the stream.
      * This media port then will be added to the conference bridge instead.
+     *
+     * \warning
+     * If the substituted port retains a pointer to the original audio
+     * stream port (e.g. a DSP wrapper around it), the application must
+     * take a reference on the inner port's group lock at construction
+     * (pj_grp_lock_add_ref() on the original param->port->grp_lock) and
+     * release it from the wrapper's on_destroy(). Otherwise
+     * pjmedia_stream_destroy(), which PJSUA calls unconditionally at
+     * call teardown, may free the inner port while the conference bridge
+     * is still iterating over the wrapper. The substituted port also
+     * needs its own pool released from on_destroy(); set
+     * #pjsua_on_stream_created_param::destroy_port to PJ_TRUE so PJSUA
+     * fires the destroy chain. See "Customizing the Audio Stream Port"
+     * in the docs guide for the full contract.
      *
      * @param call_id       Call identification.
      * @param param         The on stream created callback parameter.
@@ -2701,6 +2751,15 @@ typedef struct pjsua_config
      * Default: PJ_TRUE
      */
     pj_bool_t        no_refer_sub;
+
+    /**
+     * Default value for pjsua_acc_config.server_affinity. New accounts
+     * with server_affinity set to PJSUA_SERVER_AFFINITY_UNSPECIFIED will
+     * inherit this value.
+     *
+     * Default: PJSUA_ACC_SERVER_AFFINITY_DEFAULT
+     */
+    pj_bool_t        acc_server_affinity_default;
 
 } pjsua_config;
 
@@ -4147,6 +4206,31 @@ typedef enum pjsua_ipv6_use
 } pjsua_ipv6_use;
 
 /**
+ * Specify how server affinity is configured per account. Tristate so that
+ * pjsua_acc_modify() can leave the inherited setting intact by passing
+ * PJSUA_SERVER_AFFINITY_UNSPECIFIED. UNSPECIFIED falls back to the global
+ * pjsua_config.acc_server_affinity_default.
+ */
+typedef enum pjsua_server_affinity_mode
+{
+    /**
+     * Inherit from pjsua_config.acc_server_affinity_default.
+     */
+    PJSUA_SERVER_AFFINITY_UNSPECIFIED = 0,
+
+    /**
+     * Server affinity disabled.
+     */
+    PJSUA_SERVER_AFFINITY_DISABLED,
+
+    /**
+     * Server affinity enabled.
+     */
+    PJSUA_SERVER_AFFINITY_ENABLED
+
+} pjsua_server_affinity_mode;
+
+/**
  * Specify NAT64 options to be used in account config.
  */
 typedef enum pjsua_nat64_opt
@@ -4681,6 +4765,26 @@ typedef struct pjsua_acc_config
      * Outgoing offer will prefer to use IPv4)
      */
     pjsua_ipv6_use              ipv6_media_use;
+
+    /**
+     * Server affinity. When enabled, the account pins the resolved
+     * next-hop server (address + transport) and reuses it across
+     * subsequent same-account requests, instead of re-selecting on every
+     * DNS resolution. For TLS, this skips the per-request CVE-2020-15260
+     * hostname check on reuse: trust is asserted at handshake.
+     *
+     * Current scope: this version pins TCP/TLS connections (which solves
+     * the marquee SRV flip-flop and TLS connection-coalescing cases).
+     * UDP destination-pinning and DNS-driven auto-refresh are tracked as
+     * follow-up work; for UDP the address is stored but the per-request
+     * destination is not yet constrained.
+     *
+     * See \issue{4964} for the design (motivation, trust model, lifecycle).
+     *
+     * Default: PJSUA_SERVER_AFFINITY_UNSPECIFIED (inherit from
+     * pjsua_config.acc_server_affinity_default).
+     */
+    pjsua_server_affinity_mode  server_affinity;
 
     /**
      * Control the use of STUN for the SIP signaling.
@@ -5598,6 +5702,49 @@ PJ_DECL(pj_status_t) pjsua_acc_create_uas_contact( pj_pool_t *pool,
  */
 PJ_DECL(pj_status_t) pjsua_acc_set_transport(pjsua_acc_id acc_id,
                                              pjsua_transport_id tp_id);
+
+
+/**
+ * Discard the account's cached server-affinity state (address and
+ * transport ref). The next REGISTER will perform fresh resolution.
+ * Existing dialogs/calls hold their own transport refs and are
+ * unaffected. No-op if server affinity is disabled for the account.
+ *
+ * See #pjsua_acc_config.server_affinity.
+ *
+ * @param acc_id        The account ID.
+ * @return              PJ_SUCCESS on success.
+ */
+PJ_DECL(pj_status_t) pjsua_acc_refresh_transport(pjsua_acc_id acc_id);
+
+
+/**
+ * Pin the account's server affinity to a specific remote address.
+ * Useful for accounts that don't register (auto-capture on REGISTER
+ * doesn't apply) or to override the address REGISTER would otherwise
+ * pick.
+ *
+ * The transport is materialized eagerly via
+ * #pjsip_endpt_acquire_transport using the account's tp_type and the
+ * next-hop URI hostname (proxy[0] preferred, else reg_uri) for SNI /
+ * cert validation on TLS. On failure to materialize the transport,
+ * the call is a no-op and the existing pin (if any) is preserved.
+ *
+ * Returns PJ_EINVALIDOP if server affinity is not enabled on the
+ * account, or if pjsua_acc_config.transport_id is set (transport_id
+ * already expresses pinning, and affinity is bypassed in that case).
+ *
+ * See #pjsua_acc_config.server_affinity.
+ *
+ * @param acc_id        The account ID.
+ * @param addr          The remote address to pin to. Must not be NULL.
+ * @return              PJ_SUCCESS when the pin is established;
+ *                      PJ_EINVALIDOP if affinity is disabled or
+ *                      transport_id is set; otherwise the underlying
+ *                      transport-acquisition error.
+ */
+PJ_DECL(pj_status_t) pjsua_acc_set_affinity_addr(pjsua_acc_id acc_id,
+                                                 const pj_sockaddr *addr);
 
 
 /**
