@@ -1226,6 +1226,31 @@
 #endif
 
 
+/**
+ * Enable special handling for the Opus codec's RTP timestamp clock.
+ * Per RFC 7587 sec. 4.1, Opus uses a 48 kHz RTP timestamp clock
+ * regardless of the negotiated audio sample rate (maxplaybackrate /
+ * sprop-maxcapturerate). When this feature is enabled, the RTCP
+ * session for Opus streams uses 48 kHz, matching the wire timestamp
+ * clock that RFC 3550 sec. A.8 inter-arrival jitter math expects.
+ *
+ * With this disabled, narrowband-Opus calls (where the audio sample
+ * rate has been downgraded to 16 kHz but RTP timestamps remain at
+ * 48 kHz on the wire) report a fixed ~40 ms bias on `recvJitterMS`
+ * that does not exist on the wire — the math mixes audio-rate-ticked
+ * arrival times with 48-kHz-ticked rtp_ts values.
+ *
+ * Independent of PJMEDIA_HANDLE_G722_MPEG_BUG: the two flags handle
+ * different codecs with different sample-rate / RTP-clock quirks, on
+ * separate `#if` blocks in the RTCP session init code.
+ *
+ * By default it is enabled.
+ */
+#ifndef PJMEDIA_HANDLE_OPUS_RTP_TS_BUG
+#   define PJMEDIA_HANDLE_OPUS_RTP_TS_BUG           1
+#endif
+
+
 /* Setting to determine if media transport should switch RTP and RTCP
  * remote address to the source address of the packets it receives.
  *
