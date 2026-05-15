@@ -17,8 +17,8 @@ let package = Package(
         // The actual XCFramework downloaded from Releases
         .binaryTarget(
             name: "PJSipIOSBinary",
-            url: "https://github.com/intermedia-net/pjproject/releases/download/2.14.1-24/pjsip-ios-2.14.1-24.zip",
-            checksum: "ad0ad514b481430065608f161eb69bc31d819d53e91cfb5baa45d0ca074f2fb6"
+            url: "https://github.com/intermedia-net/pjproject/releases/download/2.14.1-26/pjsip-ios-2.14.1-26.zip",
+            checksum: "2ab0371e922827bbb2d3b1f6236d67ec3f1837c9464a78f117d5e07a323904f6"
         ),
 
         // Wrapper: lets you express linker settings (CocoaPods spec.framework equivalent)
