@@ -2883,11 +2883,46 @@ PJ_DEF(pj_status_t) pjmedia_stream_create( pjmedia_endpt *endpt,
         rtcp_setting.samples_per_frame = PJMEDIA_AFD_SPF(afd);
 
 #if defined(PJMEDIA_HANDLE_G722_MPEG_BUG) && (PJMEDIA_HANDLE_G722_MPEG_BUG!=0)
-        /* Special case for G.722 */
+        /* Special case for G.722 (RFC 3551 sec. 4.5.2): the RTP timestamp
+         * clock is 8 kHz while the audio sample rate is 16 kHz. Payload
+         * type is static (PJMEDIA_RTP_PT_G722) so it is matched directly. */
         if (info->fmt.pt == PJMEDIA_RTP_PT_G722) {
             rtcp_setting.clock_rate = 8000;
             rtcp_setting.samples_per_frame = 160 *
                 stream->codec_param.setting.frm_per_pkt;
+        }
+#endif
+
+#if defined(PJMEDIA_HANDLE_OPUS_RTP_TS_BUG) && \
+    (PJMEDIA_HANDLE_OPUS_RTP_TS_BUG!=0)
+        /* Special case for Opus per RFC 7587 sec. 4.1: the RTP timestamp
+         * clock is fixed at 48 kHz regardless of the negotiated audio
+         * sample rate (maxplaybackrate / sprop-maxcapturerate). The RTCP
+         * session must use 48 kHz so the RFC 3550 sec. A.8 inter-arrival
+         * jitter math interprets arrival time and rtp_ts in the same
+         * unit; otherwise it mixes audio-rate-ticked arrival times with
+         * 48-kHz-ticked rtp_ts and biases recvJitterMS by ~40 ms on
+         * narrowband-Opus calls.
+         *
+         * Opus uses a dynamic RTP payload type so we match on the
+         * encoding name (same pattern stream_info.c uses to detect
+         * Opus for its channel/clock-rate fmtp handling). The 48000 /
+         * afd->clock_rate ratio scales the per-packet sample count to
+         * the wire clock, matching the existing opus_ts_modifier fix
+         * above for outbound RTP timestamps.
+         *
+         * Mirrors libwebrtc's separation of RtpTimestampRateHz() from
+         * SampleRateHz(); see audio_encoder_opus.cc kRtpTimestampRateHz.
+         */
+        if (!pj_stricmp2(&info->fmt.encoding_name, "opus") &&
+            afd->clock_rate != 48000)
+        {
+            unsigned opus_ts_modifier = 48000 / afd->clock_rate;
+            rtcp_setting.clock_rate = 48000;
+            rtcp_setting.samples_per_frame =
+                PJMEDIA_AFD_SPF(afd) *
+                stream->codec_param.setting.frm_per_pkt *
+                opus_ts_modifier;
         }
 #endif
 
