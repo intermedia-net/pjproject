@@ -116,6 +116,14 @@ static pjsip_redirect_op pjsua_call_on_redirected(pjsip_inv_session *inv,
                                                   const pjsip_uri *target,
                                                   const pjsip_event *e);
 
+/*
+ * UAC transaction termination override handler.
+ */
+static pj_bool_t pjsua_call_on_uac_tsx_terminate_session(
+                                            pjsip_inv_session *inv,
+                                            pjsip_transaction *tsx,
+                                            pjsip_event *e);
+
 
 /* Create SDP for call hold. */
 static pj_status_t create_sdp_of_call_hold(pjsua_call *call,
@@ -245,6 +253,10 @@ pj_status_t pjsua_call_subsys_init(const pjsua_config *cfg)
     inv_cb.on_redirected = &pjsua_call_on_redirected;
     if (pjsua_var.ua_cfg.cb.on_call_rx_reinvite) {
         inv_cb.on_rx_reinvite = &pjsua_call_on_rx_reinvite;
+    }
+    if (pjsua_var.ua_cfg.cb.on_call_tsx_terminate_session) {
+        inv_cb.on_uac_tsx_terminate_session =
+                                    &pjsua_call_on_uac_tsx_terminate_session;
     }
 
     /* Initialize invite session module: */
@@ -1260,6 +1272,22 @@ on_return:
     return status;
 }
 
+/* Check whether an rtpmap/fmtp attribute value refers to the given payload
+ * type (SDP format). The attribute value must begin with the payload type
+ * token followed by whitespace or end-of-string. An empty fmt never matches.
+ */
+static pj_bool_t attr_matches_fmt(const pj_str_t *attr_val,
+                                  const pj_str_t *fmt)
+{
+    if (fmt->slen == 0)
+        return PJ_FALSE;
+
+    return (attr_val->slen >= fmt->slen &&
+            pj_memcmp(attr_val->ptr, fmt->ptr, fmt->slen) == 0 &&
+            (attr_val->slen == fmt->slen ||
+             pj_isspace((unsigned char)attr_val->ptr[fmt->slen])));
+}
+
 pj_status_t create_temp_sdp(pj_pool_t *pool,
                             const pjmedia_sdp_session *rem_sdp,
                             pjmedia_sdp_session **p_sdp)
@@ -1358,8 +1386,52 @@ pj_status_t create_temp_sdp(pj_pool_t *pool,
 
         /* Disable media if it has zero format/codec */
         if (m->desc.fmt_count == 0) {
+#if PJSUA_MEDIA_HAS_PJMEDIA
             m->desc.fmt[m->desc.fmt_count++] = pj_str("0");
             pjmedia_sdp_media_deactivate(pool, m);
+#else
+            /* For 3rd-party media (empty codec registry), copy formats and
+             * matching rtpmap/fmtp attributes from the remote offer so the
+             * temporary answer remains valid for
+             * pjsip_inv_verify_request3().
+             */
+            {
+                const pjmedia_sdp_media *rem_m = rem_sdp->media[i];
+                const pj_str_t STR_RTPMAP = { "rtpmap", 6 };
+                const pj_str_t STR_FMTP   = { "fmtp",   4 };
+                unsigned j, k;
+                for (j = 0; j < rem_m->desc.fmt_count &&
+                     m->desc.fmt_count < PJMEDIA_MAX_SDP_FMT; ++j)
+                {
+                    pj_strdup(pool, &m->desc.fmt[m->desc.fmt_count],
+                              &rem_m->desc.fmt[j]);
+                    ++m->desc.fmt_count;
+                }
+                for (j = 0; j < rem_m->attr_count &&
+                     m->attr_count < PJMEDIA_MAX_SDP_ATTR; ++j)
+                {
+                    const pjmedia_sdp_attr *rem_attr = rem_m->attr[j];
+                    const pj_str_t *attr_val;
+                    pj_bool_t match = PJ_FALSE;
+                    if (pj_stricmp(&rem_attr->name, &STR_RTPMAP) != 0 &&
+                        pj_stricmp(&rem_attr->name, &STR_FMTP) != 0)
+                    {
+                        continue;
+                    }
+                    attr_val = &rem_attr->value;
+                    for (k = 0; k < m->desc.fmt_count; ++k) {
+                        if (attr_matches_fmt(attr_val, &m->desc.fmt[k])) {
+                            match = PJ_TRUE;
+                            break;
+                        }
+                    }
+                    if (match) {
+                        m->attr[m->attr_count++] =
+                            pjmedia_sdp_attr_clone(pool, rem_attr);
+                    }
+                }
+            }
+#endif
         }
 
         sdp->media[sdp->media_count++] = m;
@@ -3385,6 +3457,13 @@ PJ_DEF(pj_status_t) pjsua_call_set_hold2(pjsua_call_id call_id,
     if (status != PJ_SUCCESS)
         goto on_return;
 
+    if (call->hanging_up) {
+        PJ_LOG(3,(THIS_FILE, "Can not hold call %d while it is hanging up",
+                  call_id));
+        status = PJ_EINVALIDOP;
+        goto on_return;
+    }
+
     if (call->inv->state != PJSIP_INV_STATE_CONFIRMED) {
         PJ_LOG(3,(THIS_FILE, "Can not hold call that is not confirmed"));
         status = PJSIP_ESESSIONSTATE;
@@ -3473,6 +3552,14 @@ PJ_DEF(pj_status_t) pjsua_call_reinvite( pjsua_call_id call_id,
     if (status != PJ_SUCCESS)
         goto on_return;
 
+    if (call->hanging_up) {
+        PJ_LOG(3,(THIS_FILE,
+                  "Can not re-INVITE call %d while it is hanging up",
+                  call_id));
+        status = PJ_EINVALIDOP;
+        goto on_return;
+    }
+
     if (options != call->opt.flag)
         call->opt.flag = options;
 
@@ -3508,6 +3595,14 @@ PJ_DEF(pj_status_t) pjsua_call_reinvite2(pjsua_call_id call_id,
     status = acquire_call("pjsua_call_reinvite2()", call_id, &call, &dlg);
     if (status != PJ_SUCCESS)
         goto on_return;
+
+    if (call->hanging_up) {
+        PJ_LOG(3,(THIS_FILE,
+                  "Can not re-INVITE call %d while it is hanging up",
+                  call_id));
+        status = PJ_EINVALIDOP;
+        goto on_return;
+    }
 
     if (pjsua_call_media_is_changing(call)) {
         PJ_LOG(1,(THIS_FILE, "Unable to reinvite" ERR_MEDIA_CHANGING));
@@ -3608,6 +3703,14 @@ PJ_DEF(pj_status_t) pjsua_call_update( pjsua_call_id call_id,
     if (status != PJ_SUCCESS)
         goto on_return;
 
+    if (call->hanging_up) {
+        PJ_LOG(3,(THIS_FILE,
+                  "Can not send UPDATE on call %d while it is hanging up",
+                  call_id));
+        status = PJ_EINVALIDOP;
+        goto on_return;
+    }
+
     if (options != call->opt.flag)
         call->opt.flag = options;
 
@@ -3642,6 +3745,14 @@ PJ_DEF(pj_status_t) pjsua_call_update2(pjsua_call_id call_id,
     status = acquire_call("pjsua_call_update2()", call_id, &call, &dlg);
     if (status != PJ_SUCCESS)
         goto on_return;
+
+    if (call->hanging_up) {
+        PJ_LOG(3,(THIS_FILE,
+                  "Can not send UPDATE on call %d while it is hanging up",
+                  call_id));
+        status = PJ_EINVALIDOP;
+        goto on_return;
+    }
 
     /* Don't check media changing if UPDATE is sent without SDP */
     if (pjsua_call_media_is_changing(call) &&
@@ -5466,6 +5577,26 @@ static void pjsua_call_on_media_update(pjsip_inv_session *inv,
 
     call = (pjsua_call*) inv->dlg->mod_data[pjsua_var.mod.id];
 
+    /* Stale callback guard. The inv that fired this callback may be a
+     * leftover from a dialog that the application has already hung up.
+     * If pjsua's call slot has since been reallocated to a different
+     * dialog (e.g. an outgoing make_call right after a hangup whose
+     * earlier re-INVITE is still pending a response), `call->inv` now
+     * points at the new dialog. Touching its media — in particular
+     * pjsua_media_prov_revert() below — would corrupt the new dialog's
+     * provisional state and trip the assertion in
+     * pjsua_media_channel_update() (`med_prov_cnt >= media_count`).
+     * Just drop the late event in that case.
+     */
+    if (!call || call->inv != inv) {
+        PJ_LOG(4, (THIS_FILE,
+                   "Ignoring stale media update on call %d "
+                   "(inv %p != current %p)",
+                   call ? (int)call->index : -1, inv,
+                   call ? (void*)call->inv : NULL));
+        goto on_return;
+    }
+
     if (call->hanging_up)
         goto on_return;
 
@@ -6454,6 +6585,23 @@ static void pjsua_call_on_tsx_state_changed(pjsip_inv_session *inv,
         goto on_return;
     }
 
+    /* Stale callback guard (see comment in pjsua_call_on_media_update).
+     * The inv firing this tsx-state callback may belong to a dialog
+     * whose call slot has already been recycled into a new dialog.
+     * Acting on the slot's current state would corrupt the new dialog
+     * (e.g. pjsua_media_prov_revert further below would zero
+     * med_prov_cnt of the new dialog and trip the assertion in
+     * pjsua_media_channel_update). Drop the stale event.
+     */
+    if (call->inv != inv) {
+        PJ_LOG(4, (THIS_FILE,
+                   "Ignoring stale tsx-state event on call %d "
+                   "(inv %p != current %p, cseq=%d)",
+                   call->index, inv, (void*)call->inv,
+                   tsx ? (int)tsx->cseq : -1));
+        goto on_return;
+    }
+
     /* https://github.com/pjsip/pjproject/issues/1452:
      *    If a request is retried due to 401/407 challenge, don't process the
      *    transaction first but wait until we've retried it.
@@ -6911,6 +7059,28 @@ static pjsip_redirect_op pjsua_call_on_redirected(pjsip_inv_session *inv,
     pj_log_pop_indent();
 
     return op;
+}
+
+/*
+ * UAC tsx termination override: ask the app whether to keep the call alive
+ * when the invite session is about to be terminated due to 408/481 on an
+ * in-dialog UAC request.
+ */
+static pj_bool_t pjsua_call_on_uac_tsx_terminate_session(
+                                            pjsip_inv_session *inv,
+                                            pjsip_transaction *tsx,
+                                            pjsip_event *e)
+{
+    pjsua_call *call = (pjsua_call*) inv->dlg->mod_data[pjsua_var.mod.id];
+
+    if (!call || call->hanging_up ||
+        !pjsua_var.ua_cfg.cb.on_call_tsx_terminate_session)
+    {
+        return PJ_FALSE;
+    }
+
+    return (*pjsua_var.ua_cfg.cb.on_call_tsx_terminate_session)(call->index,
+                                                                tsx, e);
 }
 
 #if defined(PJSUA_MEDIA_HAS_PJMEDIA) && PJSUA_MEDIA_HAS_PJMEDIA != 0
