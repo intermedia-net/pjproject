@@ -169,6 +169,7 @@ static pjmedia_codec_opus_config opus_cfg =
     5,                                          /* Expected packet loss */
     PJMEDIA_CODEC_OPUS_DEFAULT_COMPLEXITY,      /* Complexity           */
     PJMEDIA_CODEC_OPUS_DEFAULT_CBR,             /* Constant bit rate    */
+    PJ_FALSE,                                   /* Ignore remote bitrate*/
 };
 
 
@@ -696,12 +697,19 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
 
     /* Check max average bit rate */
     idx = find_fmtp(&attr->setting.enc_fmtp, &STR_MAX_BIT_RATE, PJ_FALSE);
-    if (idx >= 0) {
+    if (idx >= 0 && !opus_data->cfg.ignore_remote_bitrate) {
         unsigned rate;
         auto_bit_rate = PJ_FALSE;
         rate = (unsigned)pj_strtoul(&attr->setting.enc_fmtp.param[idx].val);
         if (rate < attr->info.avg_bps)
             attr->info.avg_bps = rate;
+    }
+
+    /* Ignore the remote SDP maxaveragebitrate and force the
+     * locally-configured bit_rate (e.g. above HPBX's cap). */
+    if (opus_data->cfg.ignore_remote_bitrate && opus_data->cfg.bit_rate) {
+        auto_bit_rate = PJ_FALSE;
+        attr->info.avg_bps = opus_data->cfg.bit_rate;
     }
 
     /* Check plc */
@@ -730,7 +738,7 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
     
     /* Check max average bit rate */
     idx = find_fmtp(&attr->setting.dec_fmtp, &STR_MAX_BIT_RATE, PJ_FALSE);
-    if (idx >= 0) {
+    if (idx >= 0 && !opus_data->cfg.ignore_remote_bitrate) {
         unsigned rate;
         rate = (unsigned) pj_strtoul(&attr->setting.dec_fmtp.param[idx].val);
         if (rate < attr->info.avg_bps)
@@ -780,7 +788,7 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
     PJ_LOG(4, (THIS_FILE, "Initialize Opus encoder, sample rate: %d, ch: %d, "
                           "avg bitrate: %d%s, vad: %d, plc: %d, pkt loss: %d, "
                           "complexity: %d, constant bit rate: %d, "
-                          "ptime: %d/%d",
+                          "ignore remote bitrate: %d, ptime: %d/%d",
                           opus_data->cfg.sample_rate,
                           opus_data->cfg.channel_cnt,
                           (auto_bit_rate? 0: attr->info.avg_bps),
@@ -790,6 +798,7 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
                           opus_data->cfg.packet_loss,
                           opus_data->cfg.complexity,
                           opus_data->cfg.cbr?1:0,
+                          opus_data->cfg.ignore_remote_bitrate?1:0,
                           opus_data->enc_ptime,
                           opus_data->enc_ptime_denum));
 

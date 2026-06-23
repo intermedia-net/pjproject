@@ -1979,6 +1979,7 @@ pjmedia_codec_opus_config CodecOpusConfig::toPj() const
     config.packet_loss = packet_loss;
     config.complexity = complexity;
     config.cbr = cbr;
+    config.ignore_remote_bitrate = ignore_remote_bitrate;
 
     return config;
 }
@@ -1993,6 +1994,7 @@ void CodecOpusConfig::fromPj(const pjmedia_codec_opus_config &config)
     packet_loss = config.packet_loss;
     complexity = config.complexity;
     cbr = PJ2BOOL(config.cbr);
+    ignore_remote_bitrate = PJ2BOOL(config.ignore_remote_bitrate);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
