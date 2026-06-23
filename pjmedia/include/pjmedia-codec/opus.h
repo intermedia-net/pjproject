@@ -104,6 +104,10 @@ typedef struct pjmedia_codec_opus_config
     unsigned   packet_loss; /**< Encoder's expected packet loss pct.    */
     unsigned   complexity;  /**< Encoder complexity, 0-10(10 is highest)*/
     pj_bool_t  cbr;         /**< Constant bit rate?                     */
+    pj_bool_t  ignore_remote_bitrate;
+                            /**< Ignore remote SDP maxaveragebitrate and
+                                 force the locally-configured bit_rate
+                                 (debug). Default PJ_FALSE.               */
 } pjmedia_codec_opus_config;
 
 /**

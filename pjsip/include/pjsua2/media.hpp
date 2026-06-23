@@ -2610,6 +2610,9 @@ struct CodecOpusConfig
     unsigned   packet_loss; /**< Encoder's expected packet loss pct.    */
     unsigned   complexity;  /**< Encoder complexity, 0-10(10 is highest)*/
     bool       cbr;         /**< Constant bit rate?                     */
+    bool       ignore_remote_bitrate;
+                            /**< Ignore remote SDP maxaveragebitrate and
+                                 force the configured bit_rate (debug).   */
 
     pjmedia_codec_opus_config toPj() const;
     void fromPj(const pjmedia_codec_opus_config &config);
