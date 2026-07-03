@@ -462,7 +462,8 @@ pjmedia_codec_opus_set_default_param(const pjmedia_codec_opus_config *cfg,
     opus_cfg.complexity = cfg->complexity;
 
     opus_cfg.cbr = cfg->cbr;
-    
+    opus_cfg.ignore_remote_bitrate = cfg->ignore_remote_bitrate;
+
     generate_fmtp(param);
 
     status = pjmedia_codec_mgr_set_default_param(codec_mgr, info[0], param);
