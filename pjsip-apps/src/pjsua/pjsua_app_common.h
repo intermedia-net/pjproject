@@ -225,6 +225,8 @@ pj_bool_t find_prev_call(void);
 void send_request(char *cstr_method, const pj_str_t *dst_uri);
 void log_call_dump(int call_id);
 int write_settings(pjsua_app_config *cfg, char *buf, pj_size_t max);
+char *alloc_settings(pjsua_app_config *cfg, pj_pool_t **p_pool, int *p_len);
+pj_status_t dump_settings(pjsua_app_config *cfg);
 void app_config_init_video(pjsua_acc_config *acc_cfg);
 void arrange_window(pjsua_vid_win_id wid);
 
@@ -243,6 +245,7 @@ void cli_on_stopped(pj_bool_t restart, int argc, char **argv);
 void legacy_on_stopped(pj_bool_t restart);
 
 /** Pjsua cli method **/
+void cli_setup_log_writer(pjsua_logging_config *log_cfg);
 pj_status_t cli_init(void);
 pj_status_t cli_main(pj_bool_t wait_telnet_cli);
 void cli_destroy(void);
