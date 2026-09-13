@@ -632,7 +632,10 @@ static pj_bool_t sess_cache_store(const pj_str_t *name, SSL_SESSION *sess)
             ossl_sess_cache_cnt--;
         }
 
-        /* Shift existing entries down and insert at front. */
+        /* Shift existing entries down and insert at front. The branches
+         * above guarantee there is room for one more entry.
+         */
+        pj_assert(ossl_sess_cache_cnt < PJ_SSL_SOCK_OSSL_SESS_CACHE_SIZE);
         for (n = ossl_sess_cache_cnt; n > 0; --n)
             ossl_sess_cache[n] = ossl_sess_cache[n - 1];
 
@@ -2101,10 +2104,13 @@ static pj_status_t ssl_create(pj_ssl_sock_t *ssock)
  * connection, and with server context reuse enabled, whatever context gets
  * built there is then cached and reused by every subsequent connection.
  */
-static pj_status_t ssl_init_server_ctx(pj_ssl_sock_t *ssock)
+static pj_status_t ssl_init_server_ctx(pj_ssl_sock_t *ssock,
+                                       const pj_ssl_sock_param *newsock_param)
 {
     ossl_sock_t *ossock = (ossl_sock_t *)ssock;
     pj_status_t status;
+
+    PJ_UNUSED_ARG(newsock_param);
 
     pj_assert(ssock->is_server && !ssock->parent);
 

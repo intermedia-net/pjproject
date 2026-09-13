@@ -1290,18 +1290,45 @@ static pj_status_t create_ice_media_transport(
     /* Configure TURN settings */
     if (acc_cfg->turn_cfg.enable_turn) {
         unsigned i, idx = 0;
-        
-        if (use_ipv6 && !use_nat64 && PJ_ICE_MAX_TURN >= 3) {
+        pj_bool_t turn_ipv6 = (use_ipv6 || use_nat64);
+        pj_str_t turn_server;
+        pj_uint16_t turn_port = 0;
+        pj_in_addr turn_addr;
+
+        /* Configure TURN server */
+
+        /* Parse the server entry into host:port */
+        status = pj_sockaddr_parse2(pj_AF_UNSPEC(), 0,
+                                    &acc_cfg->turn_cfg.turn_server,
+                                    &turn_server, &turn_port, NULL);
+        if (status != PJ_SUCCESS || turn_server.slen == 0) {
+            PJ_LOG(1,(THIS_FILE, "Invalid TURN server setting"));
+            return PJ_EINVAL;
+        }
+
+        if (turn_port == 0)
+            turn_port = 3479;
+
+        /* No IPv6 TURN transport when the server is an IPv4 address literal,
+         * as resolving it as IPv6 will always fail.
+         */
+        if (turn_ipv6 && !use_nat64 &&
+            pj_inet_pton(pj_AF_INET(), &turn_server, &turn_addr)==PJ_SUCCESS)
+        {
+            turn_ipv6 = PJ_FALSE;
+        }
+
+        if (turn_ipv6 && !use_nat64 && PJ_ICE_MAX_TURN >= 3) {
             ice_cfg.turn_tp_cnt = 3;
             idx = 1;
         } else {
             ice_cfg.turn_tp_cnt = 1;
         }
-        
+
         for (i = 0; i < ice_cfg.turn_tp_cnt; i++)
             pj_ice_strans_turn_cfg_default(&ice_cfg.turn_tp[i]);
 
-        if (use_ipv6 || use_nat64) {
+        if (turn_ipv6) {
             if (!use_nat64)
                 ice_cfg.turn_tp[idx++].af = pj_AF_INET6();
 
@@ -1310,28 +1337,12 @@ static pj_status_t create_ice_media_transport(
             ice_cfg.turn_tp[idx].alloc_param.af = pj_AF_INET();
         }
 
-        /* Configure TURN server */
-
-        /* Parse the server entry into host:port */
-        status = pj_sockaddr_parse2(pj_AF_UNSPEC(), 0,
-                                    &acc_cfg->turn_cfg.turn_server,
-                                    &ice_cfg.turn_tp[0].server,
-                                    &ice_cfg.turn_tp[0].port,
-                                    NULL);
-        if (status != PJ_SUCCESS || ice_cfg.turn_tp[0].server.slen == 0) {
-            PJ_LOG(1,(THIS_FILE, "Invalid TURN server setting"));
-            return PJ_EINVAL;
-        }
-
-        if (ice_cfg.turn_tp[0].port == 0)
-            ice_cfg.turn_tp[0].port = 3479;
-
         for (i = 0; i < ice_cfg.turn_tp_cnt; i++) {
             pj_str_t IN6_ADDR_ANY = {"0", 1};
 
             /* Configure TURN connection settings and credential */
-            ice_cfg.turn_tp[i].server    = ice_cfg.turn_tp[0].server;
-            ice_cfg.turn_tp[i].port      = ice_cfg.turn_tp[0].port;
+            ice_cfg.turn_tp[i].server    = turn_server;
+            ice_cfg.turn_tp[i].port      = turn_port;
             ice_cfg.turn_tp[i].conn_type = acc_cfg->turn_cfg.turn_conn_type;
             pj_memcpy(&ice_cfg.turn_tp[i].auth_cred, 
                       &acc_cfg->turn_cfg.turn_auth_cred,
@@ -2446,6 +2457,32 @@ void pjsua_media_prov_revert(pjsua_call_id call_id)
     call->med_prov_cnt = call->med_cnt;
 }
 
+/* Does the SDP have any media line with non-zero port? */
+static pj_bool_t sdp_has_active_media(const pjmedia_sdp_session *sdp)
+{
+    unsigned i;
+
+    for (i = 0; i < sdp->media_count; ++i) {
+        if (sdp->media[i]->desc.port != 0)
+            return PJ_TRUE;
+    }
+    return PJ_FALSE;
+}
+
+/* Is the media type of the SDP media line one of the types pjsua implements a
+ * stream for, i.e. handled by the type dispatch in
+ * pjsua_media_channel_update()? Anything else, e.g. T.38 image/udptl, is left
+ * to the application. Video is included regardless of PJMEDIA_HAS_VIDEO, so a
+ * build without video keeps reporting an offered video line as unsupported
+ * media instead of silently treating it as media the application owns.
+ */
+static pj_bool_t is_stream_media(const pjmedia_sdp_media *m)
+{
+    pjmedia_type type = pjmedia_get_type(&m->desc.media);
+
+    return (type == PJMEDIA_TYPE_AUDIO || type == PJMEDIA_TYPE_VIDEO ||
+            type == PJMEDIA_TYPE_TEXT);
+}
 
 pj_status_t pjsua_media_channel_init(pjsua_call_id call_id,
                                      pjsip_role_e role,
@@ -2559,8 +2596,13 @@ pj_status_t pjsua_media_channel_init(pjsua_call_id call_id,
         sort_media(rem_sdp, &STR_TEXT, acc->cfg.use_srtp,
                    mtxtidx, &mtxtcnt, &mtottxtcnt);
 
-        if (maudcnt + mvidcnt + mtxtcnt == 0) {
-            /* Expecting media in the offer */
+        if (maudcnt + mvidcnt + mtxtcnt == 0 &&
+            !(call->offer_app_managed && sdp_has_active_media(rem_sdp)))
+        {
+            /* Expecting media in the offer, unless the app is answering the
+             * offer itself and may accept active media that pjsua does not
+             * manage (e.g. T.38), see pjsua_media_channel_update().
+             */
             if (sip_err_code)
                 *sip_err_code = PJSIP_SC_NOT_ACCEPTABLE_HERE;
             status = PJSIP_ERRNO_FROM_SIP_STATUS(PJSIP_SC_NOT_ACCEPTABLE_HERE);
@@ -4583,6 +4625,16 @@ static pj_status_t apply_med_update(pjsua_call_media *call_med,
 }
 
 
+/* Release the media transport of a call media, if any. */
+static void close_call_med_tp(pjsua_call_media *call_med)
+{
+    if (call_med->tp) {
+        pjsua_set_media_tp_state(call_med, PJSUA_MED_TP_NULL);
+        pjmedia_transport_close(call_med->tp);
+        call_med->tp = call_med->tp_orig = NULL;
+    }
+}
+
 pj_status_t pjsua_media_channel_update(pjsua_call_id call_id,
                                        const pjmedia_sdp_session *local_sdp,
                                        const pjmedia_sdp_session *remote_sdp)
@@ -4748,11 +4800,7 @@ pj_status_t pjsua_media_channel_update(pjsua_call_id call_id,
             stop_media_stream(call, mi, PJ_FALSE);
 
             /* Close the media transport */
-            if (call_med->tp) {
-                pjsua_set_media_tp_state(call_med, PJSUA_MED_TP_NULL);
-                pjmedia_transport_close(call_med->tp);
-                call_med->tp = call_med->tp_orig = NULL;
-            }
+            close_call_med_tp(call_med);
             continue;
 #if 0
             /* Something is wrong */
@@ -4761,6 +4809,33 @@ pj_status_t pjsua_media_channel_update(pjsua_call_id call_id,
             status = PJMEDIA_SDP_EINSDP;
             goto on_error;
 #endif
+        }
+
+        /* Media not managed by pjsua (e.g. T.38 image/udptl) is left to the
+         * app. The remote media type is the authoritative one here: the slot
+         * may still carry the type of a previous negotiation (e.g. audio
+         * re-offered as image), and the local SDP for a disabled slot is
+         * generated from that stale type, so match against the remote offer.
+         * Not an error: stop any stream still on the slot (while call_med->type
+         * is still that stale type, as stop_media_stream() dispatches on it),
+         * release our transport, and report the slot as disabled media. If the
+         * (app-supplied) answer keeps the line active, count it as media so the
+         * call is not dropped for having no media.
+         */
+        if (!is_stream_media(remote_sdp->media[mi])) {
+            stop_media_stream(call, mi, PJ_FALSE);
+            close_call_med_tp(call_med);
+            call_med->type = PJMEDIA_TYPE_UNKNOWN;
+            call_med->state = PJSUA_CALL_MEDIA_NONE;
+            call_med->dir = PJMEDIA_DIR_NONE;
+            if (local_sdp->media[mi]->desc.port != 0) {
+                PJ_LOG(4,(THIS_FILE, "Call %d: media %d (%.*s) is left to "
+                          "the application", call_id, mi,
+                          (int)remote_sdp->media[mi]->desc.media.slen,
+                          remote_sdp->media[mi]->desc.media.ptr));
+                got_media = PJ_TRUE;
+            }
+            continue;
         }
 
         /* Apply media update action */
@@ -4790,11 +4865,8 @@ pj_status_t pjsua_media_channel_update(pjsua_call_id call_id,
          * can be deactivated by the SDP negotiation and the max media count
          * (account) setting.
          */
-        if (local_sdp->media[mi]->desc.port==0 && call_med->tp) {
-            pjsua_set_media_tp_state(call_med, PJSUA_MED_TP_NULL);
-            pjmedia_transport_close(call_med->tp);
-            call_med->tp = call_med->tp_orig = NULL;
-        }
+        if (local_sdp->media[mi]->desc.port==0)
+            close_call_med_tp(call_med);
 
 on_check_med_status:
         if (status != PJ_SUCCESS) {
@@ -4802,11 +4874,7 @@ on_check_med_status:
             stop_media_stream(call, mi, PJ_FALSE);
 
             /* Close the media transport */
-            if (call_med->tp) {
-                pjsua_set_media_tp_state(call_med, PJSUA_MED_TP_NULL);
-                pjmedia_transport_close(call_med->tp);
-                call_med->tp = call_med->tp_orig = NULL;
-            }
+            close_call_med_tp(call_med);
 
             /* Update media states */
             call_med->state = PJSUA_CALL_MEDIA_ERROR;
