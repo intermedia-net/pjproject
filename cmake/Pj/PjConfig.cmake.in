@@ -6,7 +6,15 @@ include(CMakeFindDependencyMacro)
 set(_pj_saved_module_path "${CMAKE_MODULE_PATH}")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
 
-find_dependency(Threads)
+# Threading: not needed when pjlib was built with PJLIB_WITH_THREADS=OFF
+if(@PJLIB_WITH_THREADS@)
+  find_dependency(Threads)
+endif()
+
+# Frameworks pjlib itself needs on Apple
+if(@PJ_APPLE@)
+  find_dependency(AppleFoundation)
+endif()
 
 # SSL/TLS backend (mutually exclusive)
 set(_pj_ssl_backend "@PJLIB_WITH_SSL@")
@@ -42,13 +50,25 @@ endif()
 
 # Video device backends
 if(@PJMEDIA_WITH_VIDEODEV_OPENGL@)
-  find_dependency(OpenGL)
+  # iOS has no GL or GLES2 library for FindOpenGL to find; the ES
+  # implementation is a framework, which FindOpenGLES locates instead.
+  if(@PJ_IOS@)
+    find_dependency(OpenGLES)
+  else()
+    find_dependency(OpenGL)
+  endif()
 endif()
 if(@PJMEDIA_WITH_VIDEODEV_SDL@)
   find_dependency(SDL2)
 endif()
 if(@PJMEDIA_WITH_VIDEODEV_V4L2@)
   find_dependency(V4L2)
+endif()
+if(@PJMEDIA_WITH_VIDEODEV_DARWIN@)
+  find_dependency(AVFoundation)
+endif()
+if(@PJMEDIA_WITH_VIDEODEV_METAL@)
+  find_dependency(Metal)
 endif()
 
 # AEC backends
@@ -93,6 +113,12 @@ if(@PJMEDIA_WITH_VPX_CODEC@)
 endif()
 if(@PJMEDIA_WITH_OPEN_H264_CODEC@)
   find_dependency(OpenH264)
+endif()
+if(@PJMEDIA_WITH_VID_TOOLBOX_CODEC@)
+  find_dependency(VideoToolbox)
+endif()
+if(@PJ_APPLE@ AND @PJMEDIA_WITH_ILBC_CODEC@)
+  find_dependency(AudioToolbox)
 endif()
 
 set(CMAKE_MODULE_PATH "${_pj_saved_module_path}")
