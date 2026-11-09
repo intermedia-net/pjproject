@@ -9,3 +9,14 @@
 #define PJSIP_TRANSPORT_IDLE_TIME 1
 #define PJMEDIA_HAS_RTCP_XR 1
 #include <pj/config_site_sample.h>
+
+/* APPS-30897: codecs not used by the app. Must come after the sample,
+ * which force-enables iLBC under PJ_CONFIG_IPHONE. Keep in sync with the
+ * --disable-*-codec flags in build_pjsip_and_dependencies.sh.
+ */
+#undef  PJMEDIA_HAS_ILBC_CODEC
+#define PJMEDIA_HAS_ILBC_CODEC      0
+#undef  PJMEDIA_HAS_GSM_CODEC
+#define PJMEDIA_HAS_GSM_CODEC       0
+#undef  PJMEDIA_HAS_SPEEX_CODEC
+#define PJMEDIA_HAS_SPEEX_CODEC     0
