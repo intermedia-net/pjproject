@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2009-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2009-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -55,6 +55,20 @@ typedef struct pj_ssl_sock_t pj_ssl_sock_t;
 /**
  * Opaque declaration of endpoint certificate or credentials. This may contains
  * certificate, private key, and trusted Certificate Authorities list.
+ *
+ * Which credential fields a backend honours varies:
+ *
+ * - OpenSSL honours all fields, including direct certificate instances
+ *   (\a cert_direct) and the OCSP stapling response (\a ocsp_resp_buf).
+ * - GnuTLS and mbedTLS honour the file and buffer fields; \a cert_direct and
+ *   \a ocsp_resp_buf are not supported.
+ * - The Apple backends take \a cert_file or \a cert_buf: on iOS a PKCS#12
+ *   bundle holding the private key; on Mac PKCS#12, a PEM sequence or a DER
+ *   certificate, with the private key looked up in the keychain. The CA
+ *   fields are honoured, \a privkey_pass is the import passphrase, and the
+ *   other \a privkey_* fields are ignored with a log message.
+ * - Schannel honours only the lookup criteria: the certificate is found in
+ *   the Windows certificate store, not loaded from supplied fields.
  */
 typedef struct pj_ssl_cert_t pj_ssl_cert_t;
 
@@ -267,9 +281,17 @@ typedef struct pj_ssl_cert_info {
 
     unsigned    version;            /**< Certificate version    */
 
-    pj_uint8_t  serial_no[20];      /**< Serial number, array of
-                                         octets, first index is
-                                         MSB                    */
+    pj_uint8_t  serial_no[20];      /**< Serial number, most
+                                         significant octet first,
+                                         right-aligned and padded
+                                         with leading zero octets.
+                                         A serial longer than 20
+                                         octets keeps its 20 most
+                                         significant octets. A
+                                         negative serial, which
+                                         RFC 5280 does not allow,
+                                         has a layout that depends
+                                         on the backend.        */
 
     struct {
         pj_str_t        cn;         /**< Common name            */
@@ -299,7 +321,10 @@ typedef struct pj_ssl_cert_info {
             pj_str_t    name;       /**< The name               */
         } *entry;                   /**< Subject alt name entry */
     } subj_alt_name;                /**< Subject alternative
-                                         name extension         */
+                                         name extension. Note that
+                                         the Apple backend on iOS
+                                         does not provide this, as
+                                         iOS has no API for it. */
 
     pj_str_t raw;                   /**< Raw certificate in PEM format, only
                                          available for remote certificate. */
@@ -519,6 +544,81 @@ PJ_DECL(pj_status_t) pj_ssl_cert_get_verify_status_strings(
                                                  pj_uint32_t verify_status, 
                                                  const char *error_strings[],
                                                  unsigned *count);
+
+
+/**
+ * Flags to customize the matching rules of pj_ssl_cert_verify_name().
+ */
+typedef enum pj_ssl_cert_name_match_flag
+{
+    /**
+     * Never match a wildcard in a DNS name of the certificate. Wildcards
+     * are accepted by default (RFC 9525 section 1.3), this flag is for the
+     * protocols that forbid them, e.g: SIP (RFC 5922 section 7.2).
+     */
+    PJ_SSL_CERT_NAME_NO_WILDCARD    = 1,
+
+    /**
+     * Also match "sip:" and "sips:" URI entries of the SubjectAltName
+     * extension, as specified in RFC 5922 section 7.1. The entry must be
+     * exactly the scheme followed by the name, e.g: "sip:example.com",
+     * so an entry with a user part, port, or parameters never matches.
+     *
+     * Matching a URI entry needs the application service type of the
+     * caller (RFC 9525 section 6.5), hence this flag rather than a default.
+     */
+    PJ_SSL_CERT_NAME_MATCH_SIP_URI  = 2,
+
+    /**
+     * Also match the subject Common Name, but only when the certificate
+     * presents no SubjectAltName entry that the TLS backend reports, which
+     * approximates the "no SubjectAltName extension" of RFC 5922 section
+     * 7.1: an entry of a type that no backend extracts, e.g: an SRVName,
+     * is not seen here and so does not suppress the Common Name. This is
+     * off by default, as RFC 9525 removed the Common Name as a service
+     * identifier, and any certificate of a public CA that has one repeats
+     * a SubjectAltName value in it (CA/Browser Forum Baseline Requirements
+     * section 7.1.4.3).
+     *
+     * It is still useful with the self-signed and private CA certificates
+     * that are commonly issued without a SubjectAltName extension, and
+     * RFC 8489 section 6.2.3 keeps allowing a Common Name identity for
+     * STUN and TURN.
+     */
+    PJ_SSL_CERT_NAME_MATCH_CN       = 4
+
+} pj_ssl_cert_name_match_flag;
+
+
+/**
+ * Verify that a certificate identifies the specified name, e.g: to check
+ * the identity of a server against the name used to connect to it. The SSL
+ * socket does not perform this check, application may use this function
+ * and set PJ_SSL_CERT_EIDENTITY_NOT_MATCH to the verification status when
+ * it fails.
+ *
+ * Without any flag, the matching follows RFC 9525: the name is matched
+ * case-insensitively against the DNS entries of the SubjectAltName
+ * extension, where a wildcard is accepted as the complete left-most label,
+ * and against the IP address entries, by comparing the address octets. An
+ * IP address name never matches a DNS entry, and the subject Common Name
+ * is not matched at all. Each flag names a deviation from that default.
+ *
+ * As a hardening beyond RFC 9525, which leaves this out of scope in its
+ * section 7.1, a wildcard must be followed by at least two labels, so
+ * "*.com" never matches.
+ *
+ * @param ci            The certificate info, e.g: the remote certificate
+ *                      info from pj_ssl_sock_get_info().
+ * @param name          The expected name, a hostname or an IP address.
+ * @param flags         Bitmask of #pj_ssl_cert_name_match_flag.
+ *
+ * @return              PJ_SUCCESS if the certificate identifies the name,
+ *                      PJ_ENOTFOUND if it does not.
+ */
+PJ_DECL(pj_status_t) pj_ssl_cert_verify_name(const pj_ssl_cert_info *ci,
+                                             const pj_str_t *name,
+                                             unsigned flags);
 
 /** 
  * Wipe out the keys in the SSL certificate. 
@@ -755,6 +855,19 @@ PJ_DECL(const char*) pj_ssl_curve_name(pj_ssl_curve curve);
  *                      name string is not recognized/supported.
  */
 PJ_DECL(pj_ssl_curve) pj_ssl_curve_id(const char *curve_name);
+
+/**
+ * Fill a buffer with cryptographically secure random bytes, from the random
+ * generator of the SSL backend. Currently supported with the OpenSSL, Apple
+ * and Mbed TLS backends.
+ *
+ * @param buf           The buffer to fill.
+ * @param len           Number of random bytes to write.
+ *
+ * @return              PJ_SUCCESS on success, PJ_ENOTSUP if the SSL backend
+ *                      does not provide random bytes, or another error code.
+ */
+PJ_DECL(pj_status_t) pj_ssl_rand_bytes(void *buf, pj_size_t len);
 
 /**
  * Entropy enumeration
@@ -1389,9 +1502,12 @@ typedef struct pj_ssl_sock_param
     /**
      * Specify if TLS session reuse (resumption) is enabled. When acting as
      * client, the backend will cache sessions per server name (see
-     * \a server_name) and resume them on subsequent connections, avoiding a
-     * full handshake. When acting as server, the backend will issue session
-     * tickets (including TLS 1.3 tickets) so clients can resume.
+     * \a server_name) and resume them on subsequent connections from
+     * sockets with the same CA list, certificate and verification settings,
+     * avoiding a full handshake. Client sessions are not cached when
+     * \a on_verify_cb is set, so that it is called on every connection.
+     * When acting as server, the backend will issue session tickets
+     * (including TLS 1.3 tickets) so clients can resume.
      *
      * Currently only implemented by the OpenSSL backend.
      *

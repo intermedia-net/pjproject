@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -48,9 +48,8 @@
 /* Now that we have access to OS'es <sys/select>, lets check again that
  * PJ_IOQUEUE_MAX_HANDLES is not greater than FD_SETSIZE
  */
-#if PJ_IOQUEUE_MAX_HANDLES > FD_SETSIZE
-#   error "PJ_IOQUEUE_MAX_HANDLES cannot be greater than FD_SETSIZE"
-#endif
+PJ_STATIC_ASSERT(PJ_IOQUEUE_MAX_HANDLES <= FD_SETSIZE,
+                 PJ_IOQUEUE_MAX_HANDLES_must_not_exceed_FD_SETSIZE);
 
 
 /*
@@ -75,9 +74,8 @@
  * The select ioqueue relies on socket functions (pj_sock_xxx()) to return
  * the correct error code.
  */
-#if PJ_RETURN_OS_ERROR(100) != PJ_STATUS_FROM_OS(100)
-#   error "Error reporting must be enabled for this function to work!"
-#endif
+PJ_STATIC_ASSERT(PJ_RETURN_OS_ERROR(100) == PJ_STATUS_FROM_OS(100),
+                 os_error_reporting_must_be_enabled);
 
 /*
  * During debugging build, VALIDATE_FD_SET is set.
@@ -408,7 +406,10 @@ PJ_DEF(pj_status_t) pj_ioqueue_register_sock2(pj_pool_t *pool,
 
     /* Set socket to nonblocking. */
     value = 1;
-#if defined(PJ_WIN32) && PJ_WIN32!=0 || \
+#if defined(PJ_SOCK_NONBLOCK_USE_FCNTL) && PJ_SOCK_NONBLOCK_USE_FCNTL != 0
+    PJ_UNUSED_ARG(value);
+    if (fcntl_set_nonblock(sock) < 0) {
+#elif defined(PJ_WIN32) && PJ_WIN32!=0 || \
     defined(PJ_WIN64) && PJ_WIN64 != 0 || \
     defined(PJ_WIN32_WINCE) && PJ_WIN32_WINCE!=0
     if (ioctlsocket(sock, FIONBIO, &value)) {
@@ -886,7 +887,9 @@ static pj_status_t replace_udp_sock(pj_ioqueue_key_t *h)
     
     /* Set socket to nonblocking. */
     val = 1;
-#if defined(PJ_WIN32) && PJ_WIN32!=0 || \
+#if defined(PJ_SOCK_NONBLOCK_USE_FCNTL) && PJ_SOCK_NONBLOCK_USE_FCNTL != 0
+    if (fcntl_set_nonblock(new_sock) < 0) {
+#elif defined(PJ_WIN32) && PJ_WIN32!=0 || \
     defined(PJ_WIN64) && PJ_WIN64 != 0 || \
     defined(PJ_WIN32_WINCE) && PJ_WIN32_WINCE!=0
     if (ioctlsocket(new_sock, FIONBIO, &val)) {
@@ -956,7 +959,10 @@ on_error:
  */
 PJ_DEF(int) pj_ioqueue_poll( pj_ioqueue_t *ioqueue, const pj_time_val *timeout)
 {
-    pj_fd_set_t rfdset, wfdset, xfdset;
+    pj_fd_set_t rfdset, wfdset;
+#if PJ_HAS_TCP
+    pj_fd_set_t xfdset;
+#endif
     int nfds;
     int i, count, event_cnt, processed_cnt;
     pj_ioqueue_key_t *h;
@@ -1003,12 +1009,14 @@ PJ_DEF(int) pj_ioqueue_poll( pj_ioqueue_t *ioqueue, const pj_time_val *timeout)
     pj_memcpy(&wfdset, &ioqueue->wfdset, sizeof(pj_fd_set_t));
 #if PJ_HAS_TCP
     pj_memcpy(&xfdset, &ioqueue->xfdset, sizeof(pj_fd_set_t));
-#else
-    PJ_FD_ZERO(&xfdset);
 #endif
 
 #if VALIDATE_FD_SET
+#  if PJ_HAS_TCP
     validate_sets(ioqueue, &rfdset, &wfdset, &xfdset);
+#  else
+    validate_sets(ioqueue, &rfdset, &wfdset, NULL);
+#  endif
 #endif
 
     nfds = ioqueue->nfds;
@@ -1021,8 +1029,11 @@ PJ_DEF(int) pj_ioqueue_poll( pj_ioqueue_t *ioqueue, const pj_time_val *timeout)
     __try {
 #endif
 
-    count = pj_sock_select(nfds+1, &rfdset, &wfdset, &xfdset, 
-                           timeout);
+#if PJ_HAS_TCP
+    count = pj_sock_select(nfds+1, &rfdset, &wfdset, &xfdset, timeout);
+#else
+    count = pj_sock_select(nfds+1, &rfdset, &wfdset, NULL, timeout);
+#endif
 
 #if defined(PJ_WIN32_WINPHONE8) && PJ_WIN32_WINPHONE8
     /* Ignore Invalid Handle Exception raised by select().*/
@@ -1122,10 +1133,18 @@ PJ_DEF(int) pj_ioqueue_poll( pj_ioqueue_t *ioqueue, const pj_time_val *timeout)
                 if (ioqueue_dispatch_write_event(ioqueue, event[i].key))
                     ++processed_cnt;
                 break;
+#if PJ_HAS_TCP
             case EXCEPTION_EVENT:
                 if (ioqueue_dispatch_exception_event(ioqueue, event[i].key))
                     ++processed_cnt;
                 break;
+#else
+            case EXCEPTION_EVENT:
+                /* Not reachable: only a key with a pending connect()
+                 * queues this, and without TCP pj_ioqueue_connect() never
+                 * leaves a key in that state.
+                 */
+#endif
             case NO_EVENT:
                 pj_assert(!"Invalid event!");
                 break;

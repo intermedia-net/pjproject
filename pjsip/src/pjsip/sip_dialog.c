@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -558,6 +558,14 @@ pj_status_t create_uas_dialog( pjsip_user_agent *ua,
     while (rr != NULL) {
         pjsip_route_hdr *route;
 
+        /* RFC 3261 section 16.6: Record-Route must be a SIP/SIPS URI. */
+        if (!PJSIP_URI_SCHEME_IS_SIP(rr->name_addr.uri) &&
+            !PJSIP_URI_SCHEME_IS_SIPS(rr->name_addr.uri))
+        {
+            status = PJSIP_ERRNO_FROM_SIP_STATUS(PJSIP_SC_BAD_REQUEST);
+            goto on_error;
+        }
+
         /* Clone the Record-Route, change the type to Route header. */
         route = (pjsip_route_hdr*) pjsip_hdr_clone(dlg->pool, rr);
         pjsip_routing_hdr_set_route(route);
@@ -846,6 +854,18 @@ PJ_DEF(pj_status_t) pjsip_dlg_fork( const pjsip_dialog *first_dlg,
     for (hdr=msg->hdr.prev; hdr!=end_hdr; hdr=hdr->prev) {
         if (hdr->type == PJSIP_H_RECORD_ROUTE) {
             pjsip_route_hdr *r;
+            const pjsip_uri *uri = ((pjsip_rr_hdr*)hdr)->name_addr.uri;
+
+            /* RFC 3261 section 16.6: Record-Route must be a SIP/SIPS URI.
+             * The route set must only hold SIP/SIPS URIs, drop the rest.
+             */
+            if (!PJSIP_URI_SCHEME_IS_SIP(uri) &&
+                !PJSIP_URI_SCHEME_IS_SIPS(uri))
+            {
+                PJ_LOG(3,(dlg->obj_name, "Ignoring non-SIP URI in "
+                                         "Record-Route"));
+                continue;
+            }
             r = (pjsip_route_hdr*) pjsip_hdr_clone(dlg->pool, hdr);
             pjsip_routing_hdr_set_route(r);
             pj_list_push_back(&dlg->route_set, r);
@@ -854,7 +874,10 @@ PJ_DEF(pj_status_t) pjsip_dlg_fork( const pjsip_dialog *first_dlg,
 
     //dlg->route_set_frozen = PJ_TRUE;
 
-    /* Clone client authentication session. */
+    /* Clone client authentication session, replacing the empty one that
+     * create_dialog() initialized.
+     */
+    pjsip_auth_clt_deinit(&dlg->auth_sess);
     status = pjsip_auth_clt_clone(dlg->pool, &dlg->auth_sess,
                                   &first_dlg->auth_sess);
     if (status != PJ_SUCCESS)
@@ -1355,19 +1378,24 @@ PJ_DEF(pj_status_t) pjsip_dlg_create_request( pjsip_dialog *dlg,
 static void send_ack_callback( pjsip_send_state *send_state,
                                pj_ssize_t sent, pj_bool_t *cont )
 {
-    if (sent > 0)
-        return;
+    pjsip_dialog *dlg = (pjsip_dialog*) send_state->token;
 
-    if (*cont) {
+    if (sent <= 0 && *cont) {
         PJ_PERROR(3,(THIS_FILE, (pj_status_t)-sent,
                      "Temporary failure in sending %s, "
                      "will try next server",
                      pjsip_tx_data_get_info(send_state->tdata)));
-    } else {
+        return;
+    }
+
+    if (sent <= 0) {
         PJ_PERROR(3,(THIS_FILE, (pj_status_t)-sent,
                      "Failed to send %s!",
                      pjsip_tx_data_get_info(send_state->tdata)));
     }
+
+    /* Done with the ACK, it no longer needs the dialog */
+    pj_grp_lock_dec_ref(dlg->grp_lock_);
 }
 
 /*
@@ -1468,11 +1496,18 @@ PJ_DEF(pj_status_t) pjsip_dlg_send_request( pjsip_dialog *dlg,
         /* Set transport selector */
         pjsip_tx_data_set_transport(tdata, &dlg->tp_sel);
 
+        /* Without a transaction nothing else keeps the dialog, whose
+         * memory the ACK uses, until the ACK is sent or fails.
+         */
+        pj_grp_lock_add_ref(dlg->grp_lock_);
+
         /* Send request */
         status = pjsip_endpt_send_request_stateless(dlg->endpt, tdata,
-                                                    NULL, &send_ack_callback);
-        if (status != PJ_SUCCESS)
+                                                    dlg, &send_ack_callback);
+        if (status != PJ_SUCCESS) {
+            pj_grp_lock_dec_ref(dlg->grp_lock_);
             goto on_error;
+        }
 
     }
 
@@ -2160,6 +2195,18 @@ static void dlg_update_routeset(pjsip_dialog *dlg, const pjsip_rx_data *rdata)
     for (hdr=msg->hdr.prev; hdr!=end_hdr; hdr=hdr->prev) {
         if (hdr->type == PJSIP_H_RECORD_ROUTE) {
             pjsip_route_hdr *r;
+            const pjsip_uri *uri = ((pjsip_rr_hdr*)hdr)->name_addr.uri;
+
+            /* RFC 3261 section 16.6: Record-Route must be a SIP/SIPS URI.
+             * The route set must only hold SIP/SIPS URIs, drop the rest.
+             */
+            if (!PJSIP_URI_SCHEME_IS_SIP(uri) &&
+                !PJSIP_URI_SCHEME_IS_SIPS(uri))
+            {
+                PJ_LOG(3,(dlg->obj_name, "Ignoring non-SIP URI in "
+                                         "Record-Route"));
+                continue;
+            }
             r = (pjsip_route_hdr*) pjsip_hdr_clone(dlg->pool, hdr);
             pjsip_routing_hdr_set_route(r);
             pj_list_push_back(&dlg->route_set, r);

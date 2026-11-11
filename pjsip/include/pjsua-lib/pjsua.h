@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -1632,6 +1632,8 @@ typedef struct pjsua_callback
      * is not defined, the default behavior is to accept the
      * transfer. See also on_call_transfer_request2() callback for
      * the version with \a pjsua_call_setting in the argument list.
+     * Automatic transfers requiring application-managed SDP are rejected
+     * with 488 before this callback.
      *
      * @param call_id   The call index.
      * @param dst       The destination where the call will be 
@@ -1649,6 +1651,8 @@ typedef struct pjsua_callback
      * by setting the code (default is 202). When this callback
      * is not defined, the default behavior is to accept the
      * transfer.
+     * Automatic transfers requiring application-managed SDP are rejected
+     * with 488 before this callback.
      *
      * @param call_id   The call index.
      * @param dst       The destination where the call will be 
@@ -1769,16 +1773,27 @@ typedef struct pjsua_callback
 
 
     /**
-     * Notify application when call has received a re-INVITE with offer
-     * from the peer. It allows more fine-grained control over the response
-     * to a re-INVITE. If application sets async to PJ_TRUE, it can send
+     * Notify application when call has received a re-INVITE from the peer.
+     * It allows more fine-grained control over the response to a re-INVITE.
+     * If application sets async to PJ_TRUE, it can send
      * the reply manually using the function #pjsua_call_answer_with_sdp().
      * Otherwise, by default the re-INVITE will be answered automatically
      * after the callback returns.
      *
-     * Currently, this callback is only called for re-INVITE with
-     * SDP, but app should be prepared to handle the case of re-INVITE
-     * without SDP.
+     * For a re-INVITE without SDP, this callback is called with a NULL offer
+     * only for application-managed calls or when
+     * pjsua_config.notify_offerless_reinvite is enabled. Otherwise, ordinary
+     * calls handle the request automatically without invoking this callback.
+     * By default, the active local SDP is re-offered.
+     * Application may set \a async to PJ_TRUE and
+     * later send the response with #pjsua_call_answer_with_sdp(), supplying
+     * its own local SDP offer. On the asynchronous path, a successful final
+     * response requires an application-supplied offer; the active local SDP
+     * is not automatically re-offered.
+     * On the synchronous offerless path, any 2xx callback code is treated
+     * as 200, and final rejection codes (300-699) are accepted. Codes outside
+     * 200-699 are rejected with 500. For a re-INVITE containing SDP, only
+     * 200 and 488 are valid callback codes.
      *
      * Remarks: If manually answering at a later timing, application may
      * need to monitor on_call_tsx_state() callback to check whether
@@ -1786,7 +1801,8 @@ typedef struct pjsua_callback
      * being cancelled.
      *
      * Note: on_call_rx_offer() will still be called after this callback,
-     * but only if async is PJ_FALSE and code is 200. 
+     * but only if the re-INVITE contains SDP, async is PJ_FALSE and code
+     * is 200.
      *
      * Answering manually also allows application to accept media that
      * pjsua does not manage (e.g. T.38 image/udptl), by answering with its
@@ -1797,14 +1813,19 @@ typedef struct pjsua_callback
      * as pjsua deactivates it there, see on_call_sdp_created().
      *
      * @param call_id   The call index.
-     * @param offer     Remote offer.
+     * @param offer     Remote offer, or NULL for a re-INVITE without SDP
+     *                  on an application-managed call or when
+     *                  pjsua_config.notify_offerless_reinvite is enabled.
      * @param rdata     The received re-INVITE request.
      * @param reserved  Reserved param, currently not used.
      * @param async     On input, it is PJ_FALSE. Set to PJ_TRUE if
      *                  app wants to manually answer the re-INVITE.
      * @param code      Status code to be returned for answering the
      *                  offer. On input, it contains status code 200.
-     *                  Currently, valid values are only 200 and 488.
+     *                  For a re-INVITE containing SDP, valid values are 200
+     *                  and 488. For a synchronous offerless re-INVITE, 2xx
+     *                  is treated as 200, 300-699 rejects the request, and
+     *                  values outside 200-699 are changed to 500.
      * @param opt       The current call setting, application can update
      *                  this setting for answering the offer.
      */
@@ -1900,7 +1921,8 @@ typedef struct pjsua_callback
     /**
      * Notify application when registration status has changed.
      * Application may then query the account info to get the
-     * registration details.
+     * registration details. The result of a REGISTER is not reported once
+     * the account has sent a newer one, which reports its own.
      *
      * @param acc_id        The account ID.
      */
@@ -1909,7 +1931,8 @@ typedef struct pjsua_callback
     /**
      * Notify application when registration status has changed.
      * Application may inspect the registration info to get the
-     * registration status details.
+     * registration status details. As with \a on_reg_state, the result of
+     * a REGISTER is not reported once the account has sent a newer one.
      *
      * @param acc_id        The account ID.
      * @param info          The registration info.
@@ -2452,7 +2475,12 @@ typedef struct pjsua_callback
      * \a param->handled to PJ_TRUE and later call
      * pjsip_auth_clt_async_send_req() to resend with authentication,
      * or pjsip_auth_clt_async_abandon() to give up. Both may be called
-     * synchronously within this callback or deferred.
+     * synchronously within this callback or deferred. A deferred REGISTER
+     * is not sent, and PJ_ECANCELLED is returned, if the account has sent
+     * or started another REGISTER since the challenge, or has dropped its
+     * registration and the deferred REGISTER is not an unregistration.
+     * Abandoning such a REGISTER doesn't report a registration failure:
+     * the newer REGISTER reports the result.
      *
      * If \a param->handled is left as PJ_FALSE (the default), the library
      * falls back to synchronous authentication using configured credentials.
@@ -2466,6 +2494,28 @@ typedef struct pjsua_callback
      * @param param     The callback parameters.
      */
     void (*on_auth_challenge)(pjsua_on_auth_challenge_param *param);
+
+    /**
+     * Notify application when the framework needs to send an ACK request
+     * after it receives an incoming 2xx response for INVITE (e.g. when the
+     * 2xx response carries a late SDP offer). Implementing this callback
+     * alone does not transfer responsibility for sending the ACK. The
+     * framework continues to send it automatically unless this callback
+     * returns PJ_TRUE. When it returns PJ_TRUE, the application is
+     * responsible for creating and sending the ACK itself, using
+     * #pjsua_call_send_ack(). This allows an SDP answer to be attached to
+     * the ACK or the ACK transmission to be delayed, e.g. while waiting for
+     * the SDP answer in 3PCC scenarios.
+     *
+     * @param call_id   The call index.
+     * @param rdata     The received 2xx response that triggered the need to
+     *                  send an ACK request.
+     * @return          PJ_TRUE to suppress the automatic ack request sending.
+     *                  PJ_FALSE (default) to keep current behavior, automatic
+     *                  ACK sending by the framework will proceed as usual.
+     */
+    pj_bool_t (*on_call_send_ack)(pjsua_call_id call_id,
+                                  pjsip_rx_data *rdata);
 
 } pjsua_callback;
 
@@ -2585,6 +2635,7 @@ typedef struct pjsua_config
      * Number of nameservers. If no name server is configured, the SIP SRV
      * resolution would be disabled, and domain will be resolved with
      * standard pj_gethostbyname() function.
+     * The nameservers can be changed later with #pjsua_update_nameservers().
      */
     unsigned        nameserver_count;
 
@@ -2592,6 +2643,9 @@ typedef struct pjsua_config
      * Array of nameservers to be used by the SIP resolver subsystem.
      * The order of the name server specifies the priority (first name
      * server will be used first, unless it is not reachable).
+     * Each entry is an IP address or a hostname with an optional port,
+     * e.g: "8.8.8.8", "10.0.0.1:5353", or "[2001:db8::1]:5353". Invalid
+     * entries are ignored if at least one entry is valid.
      */
     pj_str_t        nameserver[4];
 
@@ -2916,6 +2970,52 @@ typedef struct pjsua_config
      * Default: PJSUA_ACC_SERVER_AFFINITY_DEFAULT
      */
     pj_bool_t        acc_server_affinity_default;
+
+    /**
+     * Send a request again to the next server when the server answers 503
+     * or doesn't answer, such as the next DNS SRV target of the registrar,
+     * and remember the servers that failed. This is applied to
+     * pjsip_cfg()->endpt.server_failover when it differs from the default,
+     * so an application that sets that itself keeps its setting with the
+     * default here, and #pjsua_destroy() restores the previous value.
+     * Please see #pjsip_endpt_send_request() for more info. On an IP
+     * address change,
+     * the failed servers are forgotten whatever this setting, including the
+     * ones marked by the application, see
+     * #pjsip_endpt_clear_failed_servers().
+     *
+     * Default: PJSIP_SERVER_FAILOVER (disabled)
+     */
+    pj_bool_t        server_failover;
+
+    /**
+     * Resolve with the system resolver while no nameserver answers, see
+     * #PJ_DNS_RESOLVER_SYS_FALLBACK: a DNS A or AAAA query which no
+     * nameserver answers is resolved with the system resolver instead, as
+     * without a nameserver, until one answers again. This is applied to the
+     * DNS resolver of PJSUA when it is created, from \a nameserver here or
+     * with #pjsua_update_nameservers(). Note that #pjsua_destroy() turns
+     * it off first, so that unregistering starts no lookup, and then waits
+     * for the lookups already running, up to the timeout of the system
+     * resolver: on a mobile device, call it off the main thread.
+     *
+     * Default: PJ_DNS_RESOLVER_SYS_FALLBACK (disabled)
+     */
+    pj_bool_t        resolver_fallback;
+
+    /**
+     * Invoke #pjsua_callback.on_call_rx_reinvite for re-INVITEs without SDP
+     * on ordinary calls. The callback receives a NULL offer and may accept,
+     * reject, or asynchronously answer the request. Applications enabling
+     * this option must handle a NULL offer in the callback.
+     *
+     * Application-managed calls receive this notification regardless of
+     * this setting. When disabled, ordinary calls handle offerless
+     * re-INVITEs automatically without invoking the callback.
+     *
+     * Default: PJ_FALSE
+     */
+    pj_bool_t        notify_offerless_reinvite;
 
 } pjsua_config;
 
@@ -3421,6 +3521,26 @@ PJ_DECL(pj_status_t) pjsua_update_stun_servers(unsigned count, pj_str_t srv[],
 
 
 /**
+ * Update the nameservers of the DNS resolver, e.g: after the device has
+ * moved to another network. Cached DNS responses are discarded. An empty
+ * list disables the DNS resolver, the same as when no nameserver is
+ * configured. This function may block if an entry is a hostname. The
+ * #pjsua_init() must have been called before calling this function.
+ *
+ * @param count         Number of nameserver entries, at most four.
+ * @param srv           Array of nameserver entries. Please see the
+ *                      \a nameserver field in the #pjsua_config
+ *                      documentation about the format of this entry.
+ *
+ * @return              PJ_SUCCESS on success, PJLIB_UTIL_EDNSINNSADDR if
+ *                      none of the entries is valid, or the appropriate
+ *                      error code.
+ */
+PJ_DECL(pj_status_t) pjsua_update_nameservers(unsigned count,
+                                              const pj_str_t srv[]);
+
+
+/**
  * Auxiliary function to resolve and contact each of the STUN server
  * entries (sequentially) to find which is usable. The #pjsua_init() must
  * have been called before calling this function.
@@ -3588,7 +3708,8 @@ PJ_DECL(void) pjsua_dump(pj_bool_t detail);
  *    configurable via \a pjsua_acc_config.ip_change_cfg.shutdown_tp).
  * 3. Update contact URI by sending re-Registration (this step is configurable 
  *    via a\ pjsua_acc_config.allow_contact_rewrite and 
- *    a\ pjsua_acc_config.contact_rewrite_method)
+ *    a\ pjsua_acc_config.contact_rewrite_method). An account unregistered
+ *    with #pjsua_acc_set_registration() is not registered again.
  * 4. Hangup active calls (this step is configurable via 
  *    a\ pjsua_acc_config.ip_change_cfg.hangup_calls) or 
  *    continue the call by sending re-INVITE 
@@ -4009,6 +4130,27 @@ PJ_DECL(pj_status_t) pjsua_transport_lis_restart( pjsua_transport_id id,
  */
 #ifndef PJSUA_MAX_ACC
 #   define PJSUA_MAX_ACC            8
+#endif
+
+/**
+ * Maximum number of transports, i.e. those created with
+ * #pjsua_transport_create() or registered with #pjsua_transport_register()
+ * or #pjsua_tpfactory_register(). This can be overridden in config_site.h.
+ *
+ * Each transport takes a handle from the SIP endpoint's ioqueue, which is
+ * created with PJSIP_MAX_TRANSPORTS (PJ_IOQUEUE_MAX_HANDLES, 64 by default)
+ * handles and is shared with TCP/TLS connections and the DNS resolver.
+ * Raising this setting beyond a few dozen therefore also requires raising
+ * PJ_IOQUEUE_MAX_HANDLES.
+ *
+ * Default: 8
+ */
+#ifndef PJSUA_MAX_TRANSPORTS
+#   define PJSUA_MAX_TRANSPORTS     8
+#endif
+
+#if PJSUA_MAX_TRANSPORTS < 1
+#   error "PJSUA_MAX_TRANSPORTS must be at least 1"
 #endif
 
 
@@ -4742,8 +4884,12 @@ typedef struct pjsua_acc_config
     /**
      * Specify if source TCP port should be used as the initial Contact
      * address if TCP/TLS transport is used. Note that this feature will
-     * be automatically turned off when nameserver is configured because
-     * it may yield different destination address due to DNS SRV resolution.
+     * be automatically turned off when nameservers are configured
+     * (\a pjsua_config.nameserver) or when the application sets a DNS
+     * resolver or an external resolver on the SIP endpoint
+     * (#pjsip_endpt_set_resolver(),
+     * #pjsip_endpt_set_ext_resolver()), because they may yield a different
+     * destination address due to DNS SRV resolution.
      * Also some platforms are unable to report the local address of the
      * TCP socket when it is still connecting. In these cases, this
      * feature will also be turned off.
@@ -4795,6 +4941,13 @@ typedef struct pjsua_acc_config
      * the hostname of this agent. If application specifies this parameter, the
      * value will look like "<urn:uuid:00000000-0000-1000-8000-AABBCCDDEEFF>"
      * without the doublequote.
+     *
+     * An instance ID set here is sent in every REGISTER, also without SIP
+     * outbound. Registrars such as Kamailio and Flexisip then treat contacts
+     * with the same instance ID as one device and replace the older binding,
+     * so the ID must be unique to the device and persistent (RFC 5626
+     * section 4.1). The generated one is sent only with outbound: it is the
+     * same for all instances on one host, and on iOS ("localhost").
      *
      * Default: empty
      */
@@ -5103,9 +5256,9 @@ typedef struct pjsua_acc_config
      * 6xx (global failure), and failure caused by transport problem.
      * For registration retry caused by transport failure, the first retry
      * will be done after \a reg_first_retry_interval seconds instead.
-     * Note that the interval will be randomized slightly by some seconds
-     * (specified in \a reg_retry_random_interval) to avoid all clients
-     * re-registering at the same time.
+     * Note that the interval will be randomized by
+     * \a reg_retry_random_interval to avoid all clients re-registering at
+     * the same time; see there for the resulting range.
      *
      * See also \a reg_first_retry_interval setting.
      *
@@ -5116,9 +5269,9 @@ typedef struct pjsua_acc_config
     /**
      * This specifies the interval for the first registration retry. The
      * registration retry is explained in \a reg_retry_interval. Note that
-     * the value here will also be randomized by some seconds (specified
-     * in \a reg_retry_random_interval) to avoid all clients re-registering
-     * at the same time.
+     * the value here will also be randomized by
+     * \a reg_retry_random_interval to avoid all clients re-registering at
+     * the same time; see there for the resulting range.
      *
      * Default: 0
      */
@@ -5131,7 +5284,11 @@ typedef struct pjsua_acc_config
      * This is useful to avoid all clients re-registering at the same time.
      * For example, if the registration retry interval is set to 100 seconds
      * and this is set to 10 seconds, the actual registration retry interval
-     * will be in the range of 90 to 110 seconds.
+     * will be in the range of 90 to 110 seconds. If the retry interval is
+     * shorter than this value, it cannot be reduced by that much, and the
+     * actual interval will be in the range of 0 to the retry interval plus
+     * this value instead: for example 0 to 15 seconds for a retry interval
+     * of 5 seconds.
      *
      * Default: 10
      */
@@ -5282,6 +5439,11 @@ typedef struct pjsua_acc_config
     */
     pj_bool_t        auto_repond_sip_message;
 
+    /**
+     * Make new calls on this account application-managed from creation.
+     * Default: PJ_FALSE.
+     */
+    pj_bool_t        media_app_managed;
 
 } pjsua_acc_config;
 
@@ -5479,7 +5641,8 @@ PJ_DECL(pj_bool_t) pjsua_acc_is_valid(pjsua_acc_id acc_id);
  *
  * @param acc_id        The account ID to be used as default.
  *
- * @return              PJ_SUCCESS on success.
+ * @return              PJ_SUCCESS on success, or PJ_EINVAL if the account
+ *                      is not valid.
  */
 PJ_DECL(pj_status_t) pjsua_acc_set_default(pjsua_acc_id acc_id);
 
@@ -5683,7 +5846,11 @@ PJ_DECL(pj_status_t) pjsua_acc_modify(pjsua_acc_id acc_id,
  * @param acc_id        The account that will send the response.
  * @param rdata         The received request data.
  * @param tsx           The UAS transaction that was created for the incoming
- *                      request.
+ *                      request. The transaction may have ended since then,
+ *                      e.g. when its transport was disconnected; it is
+ *                      looked up again from \a rdata, and PJ_ENOTFOUND is
+ *                      returned when it no longer exists (PJ_EINVALIDOP
+ *                      when it has already sent a final response).
  * @param st_code       Status code to be sent (e.g., 200 for OK, 400 for 
  *                      Bad Request, etc.).
  * @param st_text       Optional status text. If NULL, default status text for
@@ -5767,6 +5934,10 @@ PJ_DECL(pj_status_t) pjsua_acc_set_online_status2(pjsua_acc_id acc_id,
  * when the account is added with #pjsua_acc_add(). Application normally
  * only need to call this function if it wants to manually update the
  * registration or to unregister from the server.
+ *
+ * After an unregistration, pjsua doesn't register the account again by
+ * itself, e.g: on IP change or with an auto retry, until the application
+ * renews the registration or modifies the account so that it registers.
  *
  * @param acc_id        The account ID.
  * @param renew         If renew argument is zero, this will start 
@@ -6322,7 +6493,15 @@ typedef enum pjsua_call_flag
     /**
      * Disable inter-media synchronization.
      */
-    PJSUA_CALL_NO_MEDIA_SYNC = 256
+    PJSUA_CALL_NO_MEDIA_SYNC = 256,
+
+    /**
+     * Let the application manage all SDP media on this call. Set before
+     * creating the call; it cannot be enabled or disabled later.
+     * An SDP with no media lines or all media ports set to zero does not
+     * cause the call to be rejected for lack of active media.
+     */
+    PJSUA_CALL_MEDIA_APP_MANAGED = 512
 
 } pjsua_call_flag;
 
@@ -6495,6 +6674,26 @@ typedef struct pjsua_call_send_text_param
 
 } pjsua_call_send_text_param;
 
+/**
+ * Parameters for call operations with optional application SDP. Application
+ * should use #pjsua_call_op_param_default() to initialize this structure.
+ */
+typedef struct pjsua_call_op_param
+{
+    /** Optional call setting for all operations. */
+    const pjsua_call_setting        *opt;
+
+    /** Optional local SDP offer for all operations. */
+    const pjmedia_sdp_session       *sdp;
+
+    /** User data for #pjsua_call_make_call2(). */
+    void                            *user_data;
+
+    /** Optional SIP message data for all operations. */
+    const pjsua_msg_data            *msg_data;
+
+} pjsua_call_op_param;
+
 
 /**
  * Initialize call settings.
@@ -6502,6 +6701,13 @@ typedef struct pjsua_call_send_text_param
  * @param opt           The call setting to be initialized.
  */
 PJ_DECL(void) pjsua_call_setting_default(pjsua_call_setting *opt);
+
+/**
+ * Initialize call operation parameters.
+ *
+ * @param param         The call operation parameters to be initialized.
+ */
+PJ_DECL(void) pjsua_call_op_param_default(pjsua_call_op_param *param);
 
 
 /**
@@ -6580,6 +6786,25 @@ PJ_DECL(pj_status_t) pjsua_call_make_call(pjsua_acc_id acc_id,
                                           const pjsua_call_setting *opt,
                                           void *user_data,
                                           const pjsua_msg_data *msg_data,
+                                          pjsua_call_id *p_call_id);
+
+/**
+ * Make an outgoing call with an optional application-supplied SDP offer.
+ * Supplying \a sdp requires PJSUA_CALL_MEDIA_APP_MANAGED in \a opt or the
+ * account's media_app_managed default.
+ *
+ * @param acc_id        Account ID.
+ * @param dst_uri       Destination URI.
+ * @param param         Optional call operation parameters. When specified,
+ *                      initialize with #pjsua_call_op_param_default().
+ * @param p_call_id     Pointer to receive call ID.
+ *
+ * @return              PJ_SUCCESS on success, or the appropriate error code.
+ */
+PJ_DECL(pj_status_t) pjsua_call_make_call2(
+                                          pjsua_acc_id acc_id,
+                                          const pj_str_t *dst_uri,
+                                          const pjsua_call_op_param *param,
                                           pjsua_call_id *p_call_id);
 
 
@@ -6786,11 +7011,28 @@ PJ_DECL(pj_status_t) pjsua_call_answer2(pjsua_call_id call_id,
 
 
 /**
- * Same as #pjsua_call_answer2() but this function will set the SDP
- * answer first before sending the response.
+ * Same as #pjsua_call_answer2() but this function will set the local SDP
+ * before sending the response. The SDP is used as an offer when answering
+ * an offerless INVITE or re-INVITE, and as an answer to a pending remote
+ * offer otherwise. For ordinary initial offerless calls, media is initialized
+ * before installing the supplied offer. A pending local offer cannot be
+ * replaced by this function.
+ * Supplying a local SDP offer while media initialization is already pending
+ * returns PJ_EBUSY without changing call state.
+ * Supplying SDP with a final error response (code >= 300) returns
+ * PJ_EINVALIDOP without changing call state.
+ * An application-managed answer must have the same media-line count as the
+ * remote offer; otherwise PJMEDIA_SDPNEG_EMISMEDIA is returned.
+ *
+ * For calls whose media is not application-managed, supplying a local SDP
+ * offer in a provisional (1xx) response requires 100rel to be active
+ * (#PJSIP_INV_REQUIRE_100REL). Otherwise PJ_EINVALIDOP is returned.
+ * Codes 100, 180, and 181 are rejected for such offers even with 100rel active.
+ * These restrictions apply to SDP offers, not answers to remote offers.
  *
  * @param call_id       Incoming call identification.
- * @param sdp           SDP answer. 
+ * @param sdp           Local SDP answer, or a local SDP offer when answering
+ *                      an offerless INVITE or re-INVITE.
  * @param opt           Optional call setting.
  * @param code          Status code, (100-699).
  * @param reason        Optional reason phrase. If NULL, default text
@@ -6800,7 +7042,10 @@ PJ_DECL(pj_status_t) pjsua_call_answer2(pjsua_call_id call_id,
  *                      be persistent in all next answers/responses for this
  *                      INVITE request.
  *
- * @return              PJ_SUCCESS on success, or the appropriate error code.
+ * @return              PJ_SUCCESS on success, PJ_EPENDING if media
+ *                      initialization is asynchronous, in which case the
+ *                      answer will be sent once the media initialization
+ *                      completes, or the appropriate error code on failure.
  */
 PJ_DECL(pj_status_t)
 pjsua_call_answer_with_sdp(pjsua_call_id call_id,
@@ -6809,6 +7054,33 @@ pjsua_call_answer_with_sdp(pjsua_call_id call_id,
                            unsigned code,
                            const pj_str_t *reason,
                            const pjsua_msg_data *msg_data);
+
+
+/**
+ * Create and send an ACK request for the 2xx response, optionally with an
+ * SDP answer \a sdp attached to it. Application would normally use this
+ * function from within the #pjsua_callback.on_call_send_ack() callback,
+ * to manually take over the ACK transmission, e.g. to attach an SDP answer
+ * to the ACK for a late SDP offer received in the 2xx response.
+ * This function is safe to call synchronously from the
+ * #pjsua_callback.on_call_send_ack() callback when \a call_id identifies the
+ * call whose ACK triggered the callback. A different call ID is rejected with
+ * PJ_EINVALIDOP to avoid acquiring the PJSUA lock while holding the callback
+ * call's dialog lock.
+ *
+ * @param call_id       Call identification.
+ * @param cseq          CSeq of the 2xx response that triggered the need to
+ *                      send an ACK request; normally this is the CSeq of
+ *                      the \a rdata received in the on_call_send_ack()
+ *                      callback.
+ * @param sdp           Optional SDP answer to be attached to the ACK
+ *                      request. May be NULL if no SDP body is required.
+ *
+ * @return              PJ_SUCCESS on success, or the appropriate error code.
+ */
+PJ_DECL(pj_status_t) pjsua_call_send_ack(pjsua_call_id call_id,
+                                        int cseq,
+                                        const pjmedia_sdp_session *sdp);
 
 
 /**
@@ -6952,6 +7224,59 @@ PJ_DECL(pj_status_t) pjsua_call_reinvite2(pjsua_call_id call_id,
                                           const pjsua_call_setting *opt,
                                           const pjsua_msg_data *msg_data);
 
+/**
+ * Send re-INVITE request or release hold, optionally using an
+ * application-supplied SDP offer. The SDP is applied atomically with request
+ * creation, after the call state and call setting have been validated.
+ * Supplying \a sdp requires the call to use
+ * PJSUA_CALL_MEDIA_APP_MANAGED.
+ *
+ * @param call_id       Call identification.
+ * @param param         Optional call operation parameters. When specified,
+ *                      initialize with #pjsua_call_op_param_default().
+ *
+ * @return              PJ_SUCCESS on success, or the appropriate error code.
+ */
+PJ_DECL(pj_status_t) pjsua_call_reinvite3(
+                                          pjsua_call_id call_id,
+                                          const pjsua_call_op_param *param);
+
+
+/**
+ * Set/replace the call's local SDP offer or answer directly, bypassing
+ * pjsua's own SDP generation (the on_call_sdp_created() callback). This is
+ * intended for calls where the application owns the media plane, e.g. a
+ * signalling-plane B2BUA relaying a body it received from elsewhere, or
+ * that it wants to fully control (see PJSUA_CALL_MEDIA_APP_MANAGED). If
+ * called while there is a pending remote offer, \a sdp is set as the local
+ * answer; otherwise it becomes a new/modified local offer (creating the
+ * negotiator first if the call doesn't have one yet).
+ * A local answer must have the same media-line count as the remote offer;
+ * otherwise PJMEDIA_SDPNEG_EMISMEDIA is returned without changing the
+ * negotiator.
+ *
+ * This function only updates the SDP negotiator state; it does not by
+ * itself send any SIP message. Follow up with the usual call operation
+ * (e.g. #pjsua_call_answer(), #pjsua_call_reinvite(),
+ * #pjsua_call_update()) to actually send it.
+ * A staged local offer blocks incoming offers until sent and negotiated,
+ * or cancelled by calling this function with a NULL SDP. Cancellation
+ * returns PJ_EINVALIDOP if there is no staged local offer or the offer
+ * is already outstanding in a SIP transaction.
+ * The call must use PJSUA_CALL_MEDIA_APP_MANAGED.
+ *
+ * @param call_id       Call identification.
+ * @param sdp           The local SDP offer or answer to use verbatim,
+ *                      or NULL to cancel a staged, unsent local offer.
+ *
+ * @return              PJ_SUCCESS on success, or the appropriate error
+ *                      code, e.g. if the call has no invite session yet,
+ *                      or the negotiator is in a state that cannot accept
+ *                      a local SDP right now.
+ */
+PJ_DECL(pj_status_t) pjsua_call_set_sdp(pjsua_call_id call_id,
+                                        const pjmedia_sdp_session *sdp);
+
 
 /**
  * Send UPDATE request.
@@ -6986,6 +7311,22 @@ PJ_DECL(pj_status_t) pjsua_call_update(pjsua_call_id call_id,
 PJ_DECL(pj_status_t) pjsua_call_update2(pjsua_call_id call_id,
                                         const pjsua_call_setting *opt,
                                         const pjsua_msg_data *msg_data);
+
+/**
+ * Send UPDATE request, optionally using an application-supplied SDP offer.
+ * The SDP is applied atomically with request creation, after the call state
+ * and call setting have been validated. Supplying \a sdp requires the call
+ * to use PJSUA_CALL_MEDIA_APP_MANAGED.
+ *
+ * @param call_id       Call identification.
+ * @param param         Optional call operation parameters. When specified,
+ *                      initialize with #pjsua_call_op_param_default().
+ *
+ * @return              PJ_SUCCESS on success, or the appropriate error code.
+ */
+PJ_DECL(pj_status_t) pjsua_call_update3(
+                                          pjsua_call_id call_id,
+                                          const pjsua_call_op_param *param);
 
 
 /**
@@ -7231,6 +7572,9 @@ PJ_DECL(pj_bool_t) pjsua_call_vid_stream_is_running(pjsua_call_id call_id,
  * Add, remove, modify, and/or manipulate video media stream for the
  * specified call. This may trigger a re-INVITE or UPDATE to be sent
  * for the call.
+ *
+ * App-managed calls do not have pjsua-managed video streams. This function
+ * returns PJ_EINVALIDOP for these calls.
  *
  * @param call_id       Call identification.
  * @param op            The video stream operation to be performed,
@@ -8170,8 +8514,16 @@ struct pjsua_media_config
     /**
      * Sound device uses \ref PJMEDIA_CLOCK instead of native sound device
      * clock, generally this will be able to reduce jitter and clock drift.
+     * It also moves the media processing (mixing, encoding, transmission)
+     * off the sound device callback, which then only moves frames in and
+     * out of the delay buffers.
      *
      * This option is not applicable for encoded/non-PCM format.
+     *
+     * Note that this applies to the main sound device only. An extra sound
+     * device created by pjsua_ext_snd_dev_create() takes its settings from
+     * the supplied #pjmedia_snd_port_param, so it needs
+     * PJMEDIA_SND_PORT_USE_SW_CLOCK set in its \a options field.
      *
      * Default value: PJSUA_DEFAULT_SND_USE_SW_CLOCK
      */
@@ -8208,10 +8560,9 @@ struct pjsua_media_config
      * Total number of threads that can be used by the conference bridge
      * including get_frame() thread.
      * 
-     * This value is used to determine if the conference bridge should be
-     * implemented as a parallel bridge or not.
-     * If the value is set to 0 or 1, the conference bridge will be implemented as a
-     * serial bridge, otherwise it will be implemented as a parallel bridge.
+     * If the value is set to 0 or 1, the conference bridge processes the
+     * ports sequentially in the get_frame() thread, otherwise it processes
+     * them in parallel using additional worker threads.
      * 
      * This value is ignored by all conference backends except for the 
      * multithreaded conference bridge backend
@@ -8220,6 +8571,22 @@ struct pjsua_media_config
      * Default value: PJMEDIA_CONF_THREADS
      */
     unsigned            conf_threads;
+
+    /**
+     * The priority of the conference bridge worker threads, see
+     * pjmedia_conf_param::worker_thread_prio for more info. The valid value
+     * range is platform dependent, see #pj_thread_get_prio_min() and
+     * #pj_thread_get_prio_max(), while zero means the worker threads will
+     * use the priority assigned by the OS, and #PJMEDIA_CONF_THREAD_PRIO_MAX
+     * the highest priority.
+     *
+     * This value is ignored by all conference backends except for the
+     * multithreaded conference bridge backend
+     * (PJMEDIA_CONF_PARALLEL_BRIDGE_BACKEND).
+     *
+     * Default value: PJMEDIA_CONF_THREAD_PRIO_MAX
+     */
+    int                 conf_thread_prio;
 
     /**
      * Specify whether the media manager should manage its own
@@ -8422,8 +8789,11 @@ struct pjsua_media_config
 
     /**
      * Specify idle time of sound device before it is automatically closed,
-     * in seconds. Use value -1 to disable the auto-close feature of sound
-     * device
+     * in seconds. The sound device is idle when there is no active call and
+     * no connection in the conference bridge. This also applies to a sound
+     * device opened by the application, e.g. via pjsua_set_snd_dev() or
+     * pjsua_set_null_snd_dev(). Use value -1 to disable the auto-close
+     * feature of sound device.
      *
      * Default : 1
      */

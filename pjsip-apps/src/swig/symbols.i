@@ -163,6 +163,13 @@ typedef enum pj_ssl_cert_name_type
     PJ_SSL_CERT_NAME_IP
 } pj_ssl_cert_name_type;
 
+typedef enum pj_ssl_cert_name_match_flag
+{
+    PJ_SSL_CERT_NAME_NO_WILDCARD = 1,
+    PJ_SSL_CERT_NAME_MATCH_SIP_URI = 2,
+    PJ_SSL_CERT_NAME_MATCH_CN = 4
+} pj_ssl_cert_name_match_flag;
+
 typedef enum pj_ssl_cert_verify_flag_t
 {
     PJ_SSL_CERT_ESUCCESS = 0,
@@ -985,7 +992,8 @@ typedef enum pjsua_call_flag
     PJSUA_CALL_UPDATE_VIA = 32,
     PJSUA_CALL_UPDATE_TARGET = 64,
     PJSUA_CALL_SET_MEDIA_DIR = 128,
-    PJSUA_CALL_NO_MEDIA_SYNC = 256
+    PJSUA_CALL_NO_MEDIA_SYNC = 256,
+    PJSUA_CALL_MEDIA_APP_MANAGED = 512
 } pjsua_call_flag;
 
 typedef enum pjsua_create_media_transport_flag

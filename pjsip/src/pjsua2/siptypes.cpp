@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2013-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,10 @@ using namespace pj;
 using namespace std;
 
 #define THIS_FILE       "siptypes.cpp"
+
+/* IntVector storage is passed to pjsip as a pj_ssl_cipher array. */
+PJ_STATIC_ASSERT(sizeof(pj_ssl_cipher) == sizeof(int),
+                 pj_ssl_cipher_must_be_int_sized);
 
 ///////////////////////////////////////////////////////////////////////////////
 namespace pj
@@ -180,6 +184,7 @@ pjsip_cred_info AuthCredInfo::toPj() const
 TlsConfig::TlsConfig() : credDirectType(0),
                          privKeyDirect(NULL), certDirect(NULL),
                          method(PJSIP_SSL_UNSPECIFIED_METHOD),
+                         certNameMatchFlags(0),
                          qosType(PJ_QOS_TYPE_BEST_EFFORT)
 {
     pjsip_tls_setting ts;
@@ -193,6 +198,7 @@ pjsip_tls_setting TlsConfig::toPj() const
     pjsip_tls_setting_default(&ts);
 
     ts.ca_list_file     = str2Pj(this->CaListFile);
+    ts.ca_list_path     = str2Pj(this->CaListPath);
     ts.cert_file        = str2Pj(this->certFile);
     ts.privkey_file     = str2Pj(this->privKeyFile);
     ts.password         = str2Pj(this->password);
@@ -218,8 +224,6 @@ pjsip_tls_setting TlsConfig::toPj() const
     ts.method           = this->method;
     ts.ciphers_num      = (unsigned)this->ciphers.size();
     ts.proto            = this->proto;
-    // The following will only work if sizeof(enum)==sizeof(int)
-    pj_assert(sizeof(ts.ciphers[0]) == sizeof(int));
     ts.ciphers          = ts.ciphers_num? 
                             (pj_ssl_cipher*)&this->ciphers[0] : NULL;
     ts.verify_server    = this->verifyServer;
@@ -240,6 +244,7 @@ pjsip_tls_setting TlsConfig::toPj() const
 void TlsConfig::fromPj(const pjsip_tls_setting &prm)
 {
     this->CaListFile    = pj2Str(prm.ca_list_file);
+    this->CaListPath    = pj2Str(prm.ca_list_path);
     this->certFile      = pj2Str(prm.cert_file);
     this->privKeyFile   = pj2Str(prm.privkey_file);
     this->password      = pj2Str(prm.password);
@@ -270,8 +275,6 @@ void TlsConfig::fromPj(const pjsip_tls_setting &prm)
 
     this->method        = (pjsip_ssl_method)prm.method;
     this->proto         = prm.proto;
-    // The following will only work if sizeof(enum)==sizeof(int)
-    pj_assert(sizeof(prm.ciphers[0]) == sizeof(int));
     this->ciphers       = IntVector(prm.ciphers, prm.ciphers+prm.ciphers_num);
     this->verifyServer  = PJ2BOOL(prm.verify_server);
     this->verifyClient  = PJ2BOOL(prm.verify_client);
@@ -309,6 +312,10 @@ void TlsConfig::readObject(const ContainerNode &node) PJSUA2_THROW(Error)
     NODE_READ_BOOL    ( this_node, sockOptIgnoreError);
     NODE_READ_NUM_T   ( this_node, pj_ssl_cert_lookup_type, certLookupType);
     NODE_READ_STRING  ( this_node, certLookupKeyword);
+    NODE_READ_STRING_OPT( this_node, CaListPath);
+    NODE_READ_UNSIGNED_OPT( this_node, proto);
+    NODE_READ_BOOL_OPT( this_node, enableRenegotiation);
+    NODE_READ_UNSIGNED_OPT( this_node, certNameMatchFlags);
 }
 
 void TlsConfig::writeObject(ContainerNode &node) const PJSUA2_THROW(Error)
@@ -335,6 +342,106 @@ void TlsConfig::writeObject(ContainerNode &node) const PJSUA2_THROW(Error)
     NODE_WRITE_BOOL    ( this_node, sockOptIgnoreError);
     NODE_WRITE_NUM_T   ( this_node, pj_ssl_cert_lookup_type, certLookupType);
     NODE_WRITE_STRING  ( this_node, certLookupKeyword);
+    NODE_WRITE_STRING  ( this_node, CaListPath);
+    NODE_WRITE_UNSIGNED( this_node, proto);
+    NODE_WRITE_BOOL    ( this_node, enableRenegotiation);
+    NODE_WRITE_UNSIGNED( this_node, certNameMatchFlags);
+}
+
+pj_turn_sock_tls_cfg TlsConfig::toTurnPj() const
+{
+    pj_turn_sock_tls_cfg tc;
+
+    pj_bzero(&tc, sizeof(tc));
+#if PJ_HAS_SSL_SOCK
+    pj_turn_sock_tls_cfg_default(&tc);
+#endif
+
+    tc.ca_list_file     = str2Pj(this->CaListFile);
+    tc.ca_list_path     = str2Pj(this->CaListPath);
+    tc.cert_file        = str2Pj(this->certFile);
+    tc.privkey_file     = str2Pj(this->privKeyFile);
+    tc.password         = str2Pj(this->password);
+    tc.ca_buf           = str2Pj(this->CaBuf);
+    tc.cert_buf         = str2Pj(this->certBuf);
+    tc.privkey_buf      = str2Pj(this->privKeyBuf);
+    tc.cert_lookup.type = this->certLookupType;
+    tc.cert_lookup.keyword = str2Pj(this->certLookupKeyword);
+
+    if (this->certDirect &&
+        (this->credDirectType & PJ_SSL_CERT_DIRECT_OPENSSL_X509_CERT))
+    {
+        tc.cert_direct.type |= PJ_SSL_CERT_DIRECT_OPENSSL_X509_CERT;
+        tc.cert_direct.cert = this->certDirect;
+    }
+    if (this->privKeyDirect &&
+        (this->credDirectType & PJ_SSL_CERT_DIRECT_OPENSSL_EVP_PKEY))
+    {
+        tc.cert_direct.type |= PJ_SSL_CERT_DIRECT_OPENSSL_EVP_PKEY;
+        tc.cert_direct.privkey = this->privKeyDirect;
+    }
+
+    tc.verify_server    = this->verifyServer;
+    tc.cert_name_match_flags = this->certNameMatchFlags;
+
+    tc.ssock_param.proto = this->proto;
+    tc.ssock_param.ciphers_num = (unsigned)this->ciphers.size();
+    tc.ssock_param.ciphers = tc.ssock_param.ciphers_num?
+                             (pj_ssl_cipher*)&this->ciphers[0] : NULL;
+    tc.ssock_param.timeout.sec  = this->msecTimeout / 1000;
+    tc.ssock_param.timeout.msec = this->msecTimeout % 1000;
+    tc.ssock_param.sockopt_params = this->sockOptParams.toPj();
+    tc.ssock_param.sockopt_ignore_error = this->sockOptIgnoreError;
+    tc.ssock_param.enable_renegotiation = this->enableRenegotiation;
+
+    return tc;
+}
+
+void TlsConfig::fromTurnPj(const pj_turn_sock_tls_cfg &prm)
+{
+    const pj_ssl_sock_param &sp = prm.ssock_param;
+
+    this->CaListFile    = pj2Str(prm.ca_list_file);
+    this->CaListPath    = pj2Str(prm.ca_list_path);
+    this->certFile      = pj2Str(prm.cert_file);
+    this->privKeyFile   = pj2Str(prm.privkey_file);
+    this->password      = pj2Str(prm.password);
+    this->CaBuf         = pj2Str(prm.ca_buf);
+    this->certBuf       = pj2Str(prm.cert_buf);
+    this->privKeyBuf    = pj2Str(prm.privkey_buf);
+    this->certLookupType= prm.cert_lookup.type;
+    this->certLookupKeyword = pj2Str(prm.cert_lookup.keyword);
+    this->credDirectType= 0;
+
+    if (prm.cert_direct.cert &&
+        (prm.cert_direct.type & PJ_SSL_CERT_DIRECT_OPENSSL_X509_CERT))
+    {
+        this->credDirectType |= PJ_SSL_CERT_DIRECT_OPENSSL_X509_CERT;
+        this->certDirect = prm.cert_direct.cert;
+    } else {
+        this->certDirect = NULL;
+    }
+
+    if (prm.cert_direct.privkey &&
+        (prm.cert_direct.type & PJ_SSL_CERT_DIRECT_OPENSSL_EVP_PKEY))
+    {
+        this->credDirectType |= PJ_SSL_CERT_DIRECT_OPENSSL_EVP_PKEY;
+        this->privKeyDirect = prm.cert_direct.privkey;
+    } else {
+        this->privKeyDirect = NULL;
+    }
+
+    this->verifyServer  = PJ2BOOL(prm.verify_server);
+    this->certNameMatchFlags = prm.cert_name_match_flags;
+    this->proto         = sp.proto;
+    if (sp.ciphers_num)
+        this->ciphers   = IntVector(sp.ciphers, sp.ciphers+sp.ciphers_num);
+    else
+        this->ciphers.clear();
+    this->msecTimeout   = PJ_TIME_VAL_MSEC(sp.timeout);
+    this->sockOptParams.fromPj(sp.sockopt_params);
+    this->sockOptIgnoreError = PJ2BOOL(sp.sockopt_ignore_error);
+    this->enableRenegotiation = PJ2BOOL(sp.enable_renegotiation);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -875,8 +982,9 @@ void SipTxOption::toPj(pjsua_msg_data &msg_data) const
         {
             pjsip_max_fwd_hdr *tmp = (pjsip_max_fwd_hdr*)&pj_hdr;
 
-            pj_assert(sizeof(pjsip_generic_string_hdr) >=
-                      sizeof(pjsip_max_fwd_hdr));
+            PJ_STATIC_ASSERT(sizeof(pjsip_generic_string_hdr) >=
+                             sizeof(pjsip_max_fwd_hdr),
+                             pjsip_max_fwd_hdr_must_fit_generic_string_hdr);
             pjsip_max_fwd_hdr_init(NULL, tmp, std::stoi(headers[i].hValue));
         }
 

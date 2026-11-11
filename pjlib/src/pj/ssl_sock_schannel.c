@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2024-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -645,23 +645,40 @@ static void cert_parse_info(pj_pool_t* pool, pj_ssl_cert_info* ci,
 {
     PCERT_INFO cert_info = cert->pCertInfo;
     char buf[512];
-    pj_uint8_t serial_no[20];
-    unsigned serial_size;
+    const pj_uint8_t *serial = cert_info->SerialNumber.pbData;
+    unsigned serial_size = cert_info->SerialNumber.cbData;
+    pj_uint8_t serial_no[sizeof(ci->serial_no)] = { 0 };
+    pj_bool_t serial_truncated = PJ_FALSE;
     pj_bool_t update_needed;
     pj_status_t status;
+    unsigned i;
 
     /* Get issuer & serial no first */
     status = blob_to_str(cert->dwCertEncodingType, &cert_info->Issuer,
                          CERT_X500_NAME_STR | CERT_NAME_STR_NO_PLUS_FLAG,
                          buf, sizeof(buf));
 
-    serial_size = PJ_MIN(cert_info->SerialNumber.cbData, sizeof(serial_no));
-    pj_memcpy(&serial_no, cert_info->SerialNumber.pbData, serial_size);
+    /* CERT_INFO holds the serial least significant octet first; reverse it
+     * right-aligned, as the OpenSSL backend stores it. A DER sign octet is
+     * dropped only if the serial won't fit.
+     */
+    while (serial_size > sizeof(serial_no) && serial[serial_size - 1] == 0)
+        --serial_size;
+    if (serial_size > sizeof(serial_no)) {
+        serial += serial_size - sizeof(serial_no);
+        serial_size = sizeof(serial_no);
+        serial_truncated = PJ_TRUE;
+    }
+    for (i = 0; i < serial_size; ++i)
+        serial_no[sizeof(serial_no) - 1 - i] = serial[i];
 
-    /* Check if the contents need to be updated */
+    /* Check if the contents need to be updated; a truncated serial cannot
+     * be proven equal, so it always refreshes.
+     */
     update_needed = status == PJ_SUCCESS &&
                     (pj_strcmp2(&ci->issuer.info, buf) ||
-                     pj_memcmp(ci->serial_no, serial_no, serial_size));
+                     pj_memcmp(ci->serial_no, serial_no, sizeof(serial_no)) ||
+                     serial_truncated);
     if (!update_needed)
         return;
 
@@ -679,7 +696,7 @@ static void cert_parse_info(pj_pool_t* pool, pj_ssl_cert_info* ci,
         pj_strdup2(pool, &ci->issuer.cn, buf);
 
     /* Serial number */
-    pj_memcpy(ci->serial_no, serial_no, serial_size);
+    pj_memcpy(ci->serial_no, serial_no, sizeof(ci->serial_no));
 
     /* Subject */
     status = blob_to_str(cert->dwCertEncodingType, &cert_info->Subject,
@@ -742,9 +759,16 @@ static void cert_parse_info(pj_pool_t* pool, pj_ssl_cert_info* ci,
                 break;
             case CERT_ALT_NAME_IP_ADDRESS:
                 type = PJ_SSL_CERT_NAME_IP;
-                pj_inet_ntop2(ane->IPAddress.cbData == sizeof(pj_in6_addr)?
-                                    pj_AF_INET6() : pj_AF_INET(),
-                              ane->IPAddress.pbData, buf, sizeof(buf));
+                /* Ignore malformed IP address */
+                if (ane->IPAddress.cbData == sizeof(pj_in_addr) ||
+                    ane->IPAddress.cbData == sizeof(pj_in6_addr))
+                {
+                    len = pj_inet_ntop(ane->IPAddress.cbData ==
+                                           sizeof(pj_in6_addr)?
+                                           pj_AF_INET6() : pj_AF_INET(),
+                                       ane->IPAddress.pbData, buf,
+                                       sizeof(buf)) == PJ_SUCCESS;
+                }
                 break;
             case CERT_ALT_NAME_URL:
                 type = PJ_SSL_CERT_NAME_URI;
@@ -1659,6 +1683,15 @@ static pj_status_t ssl_write(pj_ssl_sock_t* ssock, const void* data,
     *nwritten = (int)total;
 
     return status;
+}
+
+
+PJ_DEF(pj_status_t) pj_ssl_rand_bytes(void *buf, pj_size_t len)
+{
+    PJ_UNUSED_ARG(buf);
+    PJ_UNUSED_ARG(len);
+    PJ_TODO(IMPLEMENT_PJ_SSL_RAND_BYTES);
+    return PJ_ENOTSUP;
 }
 
 

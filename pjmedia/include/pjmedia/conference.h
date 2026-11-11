@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -233,6 +233,12 @@ typedef struct pjmedia_conf_op_info
      */
     pjmedia_conf_op_param   op_param;
 
+    /**
+     * The application data specified in pjmedia_conf_param::user_data
+     * when the conference bridge was created.
+     */
+    void                   *user_data;
+
 } pjmedia_conf_op_info;
 
 /**
@@ -257,6 +263,13 @@ enum pjmedia_conf_option
     PJMEDIA_CONF_USE_LINEAR=8   /**< Use linear resampling instead of filter
                                      based.                                 */
 };
+
+/**
+ * Special value for pjmedia_conf_param::worker_thread_prio to run the
+ * worker threads at the highest priority, as reported by
+ * #pj_thread_get_prio_max().
+ */
+#define PJMEDIA_CONF_THREAD_PRIO_MAX    PJ_MAXINT32
 
 /**
  * This structure specifies the conference bridge creation parameters.
@@ -317,8 +330,9 @@ typedef struct pjmedia_conf_param
      * The number of worker threads should be less than or equal to the number 
      * of the processor cores. However, the optimal number of worker threads
      * is application and hardware dependent.
-     * The default value is zero - sequential conference bridge.
-     * This value is compatible with previous behavior.
+     * The default value is PJMEDIA_CONF_THREADS-1, i.e. zero (sequential
+     * conference bridge) on iOS, Android, and when threads are disabled,
+     * and 3 otherwise.
      * At compile time application developer can change the default value by 
      * setting #PJMEDIA_CONF_THREADS macro in the config_site.h.
      * PJMEDIA_CONF_THREADS is total number of conference bridge threads 
@@ -334,6 +348,47 @@ typedef struct pjmedia_conf_param
      * the pjsua2 level using the pjsua2::MediaConfig::confThreads parameter.
      */
     unsigned worker_threads;
+
+    /**
+     * The priority of the conference bridge worker threads. The valid value
+     * range is platform dependent, see #pj_thread_get_prio_min() and
+     * #pj_thread_get_prio_max().
+     *
+     * The thread calling get_frame() of the bridge is usually a high priority
+     * thread, e.g: the sound device thread or the media clock thread, and it
+     * has to wait for all worker threads to finish mixing before it can
+     * return the frame. So leaving the worker threads at the default priority
+     * may let other threads preempt them and delay the audio frame.
+     * #PJMEDIA_CONF_THREAD_PRIO_MAX will run the worker threads at the
+     * highest priority, like the media clock thread.
+     *
+     * Note that the worker threads may starve the rest of the application
+     * when they are not fewer than the processor cores, in that case
+     * consider a lower priority. Also note that on some platforms, e.g:
+     * Linux, raising thread priority requires a specific privilege, without
+     * it the setting will have no effect.
+     *
+     * Zero means the worker threads will use the priority assigned by the OS.
+     * The default value is #PJMEDIA_CONF_THREAD_PRIO_MAX.
+     * This value is ignored by all conference backends except for the
+     * multithreaded conference bridge backend
+     * (PJMEDIA_CONF_PARALLEL_BRIDGE_BACKEND).
+     *
+     * The worker thread priority can be configured at the pjsua level using
+     * the pjsua_media_config::conf_thread_prio parameter, or at the pjsua2
+     * level using the pjsua2::MediaConfig::confThreadPrio parameter.
+     */
+    int worker_thread_prio;
+
+    /**
+     * Application data, which will be passed back in
+     * pjmedia_conf_op_info::user_data of the callback set with
+     * #pjmedia_conf_set_op_cb().
+     *
+     * The default value is NULL.
+     */
+    void *user_data;
+
 } pjmedia_conf_param;
 
 
@@ -347,6 +402,7 @@ PJ_INLINE(void) pjmedia_conf_param_default(pjmedia_conf_param *param)
 #if defined(PJMEDIA_CONF_THREADS) && PJMEDIA_CONF_THREADS > 1
     param->worker_threads = PJMEDIA_CONF_THREADS-1;
 #endif
+    param->worker_thread_prio = PJMEDIA_CONF_THREAD_PRIO_MAX;
 }
 
 /**
@@ -472,6 +528,9 @@ PJ_DECL(pj_status_t) pjmedia_conf_destroy( pjmedia_conf *conf );
  * 
  * The callback will most likely be called from media threads,
  * thus application must not perform long/blocking processing in this callback.
+ *
+ * The application data specified in pjmedia_conf_param::user_data is
+ * passed to the callback in pjmedia_conf_op_info::user_data.
  * 
  * @param conf          The conference bridge.
  * @param cb            Callback to be called. Set this to NULL to unregister

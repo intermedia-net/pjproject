@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2010-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -42,6 +42,9 @@
 #define EADDRINUSE WSAEADDRINUSE
 
 #endif
+
+/* The telnet front end is a TCP server, hence it needs TCP support. */
+#if PJ_HAS_TCP
 
 #define CLI_TELNET_BUF_SIZE 256
 
@@ -668,16 +671,10 @@ static void send_bell(cli_telnet_sess *sess) {
 
 static void send_prompt_str(cli_telnet_sess *sess)
 {
-    pj_str_t send_data;
-    char data_str[128];
     cli_telnet_fe *fe = (cli_telnet_fe *)sess->base.fe;
 
-    send_data.ptr = data_str;
-    send_data.slen = 0;
-
-    pj_strcat(&send_data, &fe->cfg.prompt_str);
-
-    telnet_sess_send(sess, &send_data);
+    /* Send the prompt directly to avoid a fixed-size copy buffer. */
+    telnet_sess_send(sess, &fe->cfg.prompt_str);
 }
 
 /* Buffer of spaces, used to stream the caret offset in bounded chunks
@@ -928,17 +925,13 @@ static void send_ambi_arg(cli_telnet_sess *sess,
 static void send_comp_arg(cli_telnet_sess *sess,
                           pj_cli_exec_info *info)
 {
-    pj_str_t send_data;
-    char data[128];
+    pj_str_t space;
 
-    pj_strcat2(&info->hint[0].name, " ");
-
-    send_data.ptr = data;
-    send_data.slen = 0;
-
-    pj_strcat(&send_data, &info->hint[0].name);
-
-    telnet_sess_send(sess, &send_data);
+    /* Send the hint and trailing space directly: avoids a fixed-size copy
+     * buffer and the in-place append that overran the registered name.
+     */
+    telnet_sess_send(sess, &info->hint[0].name);
+    telnet_sess_send(sess, pj_cstr(&space, " "));
 }
 
 /*
@@ -1091,6 +1084,11 @@ static pj_bool_t handle_tab(cli_telnet_sess *sess)
                               info.hint[0].name.ptr, cplen);
                     len += (unsigned)cplen;
                 }
+                /* send_comp_arg() emits a trailing space to the client;
+                 * mirror it in the buffer so the two stay in sync.
+                 */
+                if (len < sizeof(sess->rcmd->rbuf) - 1)
+                    sess->rcmd->rbuf[len++] = ' ';
                 sess->rcmd->rbuf[len] = 0;
             }
         } else {
@@ -1290,6 +1288,8 @@ static pj_status_t process_vt100_cmd(cli_telnet_sess *sess,
     return status;
 }
 
+#endif  /* PJ_HAS_TCP */
+
 PJ_DEF(void) pj_cli_telnet_cfg_default(pj_cli_telnet_cfg *param)
 {
     pj_assert(param);
@@ -1298,6 +1298,8 @@ PJ_DEF(void) pj_cli_telnet_cfg_default(pj_cli_telnet_cfg *param)
     param->port = PJ_CLI_TELNET_PORT;
     param->log_level = PJ_CLI_TELNET_LOG_LEVEL;
 }
+
+#if PJ_HAS_TCP
 
 /*
  * Send a message to a telnet session
@@ -2038,3 +2040,31 @@ PJ_DEF(pj_status_t) pj_cli_telnet_get_info(pj_cli_front_end *fe,
 
     return PJ_SUCCESS;
 }
+
+#else   /* PJ_HAS_TCP */
+
+/*
+ * Stubs for when TCP support is disabled.
+ */
+
+PJ_DEF(pj_status_t) pj_cli_telnet_create(pj_cli_t *cli,
+                                         pj_cli_telnet_cfg *param,
+                                         pj_cli_front_end **p_fe)
+{
+    PJ_UNUSED_ARG(cli);
+    PJ_UNUSED_ARG(param);
+    PJ_UNUSED_ARG(p_fe);
+
+    PJ_ASSERT_RETURN(!"Telnet CLI front end requires PJ_HAS_TCP", PJ_ENOTSUP);
+}
+
+PJ_DEF(pj_status_t) pj_cli_telnet_get_info(pj_cli_front_end *fe,
+                                           pj_cli_telnet_info *info)
+{
+    PJ_UNUSED_ARG(fe);
+    PJ_UNUSED_ARG(info);
+
+    PJ_ASSERT_RETURN(!"Telnet CLI front end requires PJ_HAS_TCP", PJ_ENOTSUP);
+}
+
+#endif  /* PJ_HAS_TCP */

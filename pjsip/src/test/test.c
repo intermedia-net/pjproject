@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -245,6 +245,21 @@ static void close_report(void)
 }
 
 
+/* Recreate the test endpoint after a test destroyed it, e.g: with PJSUA */
+void restore_test_endpt(void)
+{
+    pj_status_t status;
+
+    status = pjsip_endpt_create(&caching_pool.factory, "endpt", &endpt);
+    if (status != PJ_SUCCESS) {
+        PJ_PERROR(1, (THIS_FILE, status, "Error creating endpoint"));
+        return;
+    }
+    status = pjsip_tsx_layer_init_module(endpt);
+    if (status != PJ_SUCCESS)
+        PJ_PERROR(1, (THIS_FILE, status, "Error initializing tsx layer"));
+}
+
 /*
  * pjsip_ua_instance() and pjsip_inv_usage_instance() are process wide
  * singletons that more than one test initializes, so an unguarded
@@ -383,6 +398,8 @@ int test_main(int argc, char *argv[])
 
 #if INCLUDE_DLG_CORE_TEST
     UT_ADD_TEST(&test_app.ut_app, dlg_core_test, 0);
+    /* Exclusive, as it changes the resolver */
+    UT_ADD_TEST(&test_app.ut_app, dlg_ack_resolve_test, PJ_TEST_EXCLUSIVE);
 #endif
 
 #if INCLUDE_TSX_BENCH
@@ -395,6 +412,11 @@ int test_main(int argc, char *argv[])
 
 #if INCLUDE_RESOLVE_TEST
     UT_ADD_TEST(&test_app.ut_app, resolve_test, 0);
+#endif
+
+    /* Exclusive, as it changes the resolver and the transaction timers */
+#if INCLUDE_SRV_FAILOVER_TEST
+    UT_ADD_TEST(&test_app.ut_app, srv_failover_test, PJ_TEST_EXCLUSIVE);
 #endif
 
 #if INCLUDE_INV_OA_TEST
@@ -429,6 +451,14 @@ int test_main(int argc, char *argv[])
         UT_ADD_TEST1(&test_app.ut_app, tsx_uac_test, (void*)(uintptr_t)i, 0);
         UT_ADD_TEST1(&test_app.ut_app, tsx_uas_test, (void*)(uintptr_t)i, 0);
     }
+
+#if PJ_HAS_TCP && PJ_HAS_THREADS
+    /* Exclusive, as any thread polling the endpoint may wait for the
+     * transaction's lock that this test holds.
+     */
+    UT_ADD_TEST1(&test_app.ut_app, tsx_send_cb_terminate_test,
+                 (void*)(uintptr_t)(tsx_test_cnt - 1), PJ_TEST_EXCLUSIVE);
+#endif
 #endif
 
 #if INCLUDE_LOOP_TEST
@@ -468,10 +498,27 @@ int test_main(int argc, char *argv[])
 #if INCLUDE_PJSUA_CALL_TEST
     UT_ADD_TEST(&test_app.ut_app, pjsua_call_test,
                 PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
+    UT_ADD_TEST(&test_app.ut_app, pjsua_late_sdp_offer_test,
+                PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
 #endif
 
 #if INCLUDE_PJSUA_ACC_TEST
     UT_ADD_TEST(&test_app.ut_app, pjsua_acc_test,
+                PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
+#endif
+
+#if INCLUDE_PJSUA_PRES_TEST
+    UT_ADD_TEST(&test_app.ut_app, pjsua_pres_test,
+                PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
+#endif
+
+#if INCLUDE_PJSUA_DNS_TEST
+    UT_ADD_TEST(&test_app.ut_app, pjsua_dns_test,
+                PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
+#endif
+
+#if INCLUDE_SRV_FAILOVER_TEST && INCLUDE_PJSUA_ACC_TEST
+    UT_ADD_TEST(&test_app.ut_app, srv_failover_pjsua_test,
                 PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
 #endif
 

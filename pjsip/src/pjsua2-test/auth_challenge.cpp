@@ -27,9 +27,15 @@
  *      calls respond(creds).
  *   4. Deferred abandon: event loop calls abandon().
  *   5. Account deletion with outstanding deferred challenge.
+ *   6. DigestChallenge/DigestCredential::toPj() into a pool.
+ *   7. AKA credential: parameters added in onCredAuth are sent.
+ *   8. Deferred respond after the account unregistered: nothing is sent.
+ *   9. Deferred respond/respond(creds) after the account was deleted: the
+ *      challenge is released.
  */
 
 #include <iostream>
+#include <string>
 #include <memory>
 
 #include "auth_challenge.hpp"
@@ -60,6 +66,9 @@ using namespace pj;
 
 static unsigned g_mock_req_count;
 static unsigned g_mock_auth_count;
+static const char *g_mock_chal;
+static const char *g_mock_user;
+static std::string g_mock_auth_param;
 
 static pj_bool_t g_mock_enabled;
 
@@ -67,6 +76,7 @@ static pj_bool_t mock_registrar_on_rx_request(pjsip_rx_data *rdata)
 {
     pjsip_msg *msg = rdata->msg_info.msg;
     pjsip_hdr  hdr_list;
+    pjsip_authorization_hdr *hauth;
     int        code;
 
     if (!g_mock_enabled)
@@ -80,23 +90,31 @@ static pj_bool_t mock_registrar_on_rx_request(pjsip_rx_data *rdata)
         pjsip_sip_uri *uri;
         uri = (pjsip_sip_uri*)pjsip_uri_get_uri(
                   rdata->msg_info.from->uri);
-        if (pj_strcmp2(&uri->user, TEST_USER) != 0)
+        if (pj_strcmp2(&uri->user, g_mock_user) != 0)
             return PJ_FALSE;
     }
 
     g_mock_req_count++;
     pj_list_init(&hdr_list);
 
-    if (pjsip_msg_find_hdr(msg, PJSIP_H_AUTHORIZATION, NULL) == NULL) {
+    hauth = (pjsip_authorization_hdr*)
+            pjsip_msg_find_hdr(msg, PJSIP_H_AUTHORIZATION, NULL);
+    if (hauth == NULL) {
         const pj_str_t hname  = pj_str((char*)"WWW-Authenticate");
-        const pj_str_t hvalue =
-            pj_str((char*)"Digest realm=\"test\", nonce=\"testnonce\"");
+        const pj_str_t hvalue = pj_str((char*)g_mock_chal);
         pjsip_generic_string_hdr *hwww =
             pjsip_generic_string_hdr_create(rdata->tp_info.pool,
                                             &hname, &hvalue);
         pj_list_push_back(&hdr_list, hwww);
         code = 401;
     } else {
+        const pj_str_t pname = pj_str((char*)"x-test");
+        pjsip_param *param;
+
+        param = pjsip_param_find(&hauth->credential.digest.other_param,
+                                 &pname);
+        if (param)
+            g_mock_auth_param.assign(param->value.ptr, param->value.slen);
         g_mock_auth_count++;
         code = 200;
     }
@@ -112,6 +130,9 @@ static void reset_mock_registrar()
 {
     g_mock_req_count  = 0;
     g_mock_auth_count = 0;
+    g_mock_chal       = "Digest realm=\"test\", nonce=\"testnonce\"";
+    g_mock_user       = TEST_USER;
+    g_mock_auth_param.clear();
     g_mock_enabled    = PJ_TRUE;
 }
 
@@ -185,6 +206,18 @@ public:
 
 
 /*****************************************************************************
+ * AuthTestEndpoint — answers AKA challenges with an extra parameter
+ *****************************************************************************/
+
+pj_status_t AuthTestEndpoint::onCredAuth(OnCredAuthParam &prm)
+{
+    prm.digestCredential.response = "00000000000000000000000000000000";
+    prm.digestCredential.otherParam["x-test"] = "value1";
+    return PJ_SUCCESS;
+}
+
+
+/*****************************************************************************
  * Helpers
  *****************************************************************************/
 
@@ -195,6 +228,20 @@ static void poll_events(unsigned max_ms)
         pjsua_handle_events(50);
         elapsed += 50;
     }
+}
+
+/* Pump for the whole period: pjsua_handle_events() may return early */
+static void pump_for(unsigned ms)
+{
+    pj_time_val end, now;
+
+    pj_gettickcount(&end);
+    end.msec += ms;
+    pj_time_val_normalize(&end);
+    do {
+        pjsua_handle_events(10);
+        pj_gettickcount(&now);
+    } while (PJ_TIME_VAL_LT(now, end));
 }
 
 static void init_state(TestAction action)
@@ -536,4 +583,228 @@ void AuthChallengeTests::accountDeleteWithPending()
     pjsua_handle_events(500);
 
     std::cout << "  accountDeleteWithPending: PASSED\n";
+}
+
+
+/*****************************************************************************
+ * Test 8: deferredRespondAfterUnregister
+ *
+ * Account has credentials. 401 -> onAuthChallenge calls defer(). The
+ * account unregisters, and the challenged transaction ends. respond() must
+ * return PJ_ECANCELLED and send nothing.
+ *****************************************************************************/
+void AuthChallengeTests::deferredRespondAfterUnregister()
+{
+    std::cout << "\n=== AUTH TEST: deferredRespondAfterUnregister ===\n";
+    init_state(ACTION_DEFER_RESPOND);
+
+    /* Another user, so earlier tests' retransmissions are not answered */
+    g_mock_user = TEST_USER "-unreg";
+
+    /* End the challenged transaction soon after its 401 (Timer K) */
+    unsigned t4 = pjsip_cfg()->tsx.t4;
+    pjsip_tsx_set_timers(0, 0, 1, 0);
+
+    AccountConfig cfg = make_acc_config(port, true);
+    cfg.idUri = "sip:" TEST_USER "-unreg@pjsip.org";
+    std::unique_ptr<TestAccount> acc(new TestAccount);
+    acc->create(cfg);
+    acc->setRegistration(true);
+
+    {
+        unsigned elapsed = 0;
+        while (elapsed < 10000 && !g_state.deferred) {
+            pjsua_handle_events(50);
+            elapsed += 50;
+        }
+    }
+
+    g_state.deferEnabled = false;
+    g_state.regDone = false;
+    if (g_state.deferred)
+        acc->setRegistration(false);
+    poll_events(10000);
+
+    /* Let the challenged transaction end (Timer K) */
+    pump_for(500);
+
+    unsigned req_count = g_mock_req_count;
+    pj_status_t status = PJ_SUCCESS;
+    if (g_state.deferred)
+        status = g_state.deferred->respond();
+    g_state.deferred.reset();
+    pjsua_handle_events(500);
+    pjsip_tsx_set_timers(0, 0, t4, 0);
+
+    TEST_ASSERT(g_state.regDone == true);
+    TEST_ASSERT(g_state.regCode == 200);
+    TEST_ASSERT(status == PJ_ECANCELLED);
+    TEST_ASSERT(g_mock_req_count == req_count);
+
+    g_mock_enabled = PJ_FALSE;
+    acc.reset();
+    pjsua_handle_events(500);
+
+    std::cout << "  deferredRespondAfterUnregister: PASSED\n";
+}
+
+
+/*****************************************************************************
+ * Test 9: deferredRespondAfterDelete
+ *
+ * Account has credentials. 401 -> onAuthChallenge calls defer(). The
+ * account is deleted and the challenged transaction ends. respond() and
+ * respond(creds) must return PJ_EINVALIDOP and release the transaction.
+ *****************************************************************************/
+void AuthChallengeTests::deferredRespondAfterDelete(bool with_creds)
+{
+    std::cout << "\n=== AUTH TEST: deferredRespondAfterDelete"
+              << (with_creds ? " (creds)" : "") << " ===\n";
+    init_state(ACTION_DEFER_DELETE_ACC);
+    /* Own user each run, as in deferredRespondAfterUnregister */
+    g_mock_user = with_creds ? TEST_USER "-delc" : TEST_USER "-del";
+
+    unsigned t4 = pjsip_cfg()->tsx.t4;
+    pjsip_tsx_set_timers(0, 0, 1, 0);
+
+    AccountConfig cfg = make_acc_config(port, true);
+    cfg.idUri = std::string("sip:") + g_mock_user + "@pjsip.org";
+    std::unique_ptr<TestAccount> acc(new TestAccount);
+    acc->create(cfg);
+    acc->setRegistration(true);
+
+    {
+        unsigned elapsed = 0;
+        while (elapsed < 10000 && !g_state.deferred) {
+            pjsua_handle_events(50);
+            elapsed += 50;
+        }
+    }
+
+    g_mock_enabled = PJ_FALSE;
+    g_state.deferEnabled = false;
+    acc.reset();
+    pump_for(500);
+
+    /* The transaction pool is released once the token lets it go */
+    pj_caching_pool *cp = (pj_caching_pool*)pjsua_get_pool_factory();
+    unsigned used = (unsigned)cp->used_count;
+    pj_status_t status = PJ_SUCCESS;
+    if (g_state.deferred && with_creds)
+        status = g_state.deferred->respond(AuthCredInfoVector());
+    else if (g_state.deferred)
+        status = g_state.deferred->respond();
+    unsigned used_after = (unsigned)cp->used_count;
+    g_state.deferred.reset();
+    pjsip_tsx_set_timers(0, 0, t4, 0);
+
+    TEST_ASSERT(status == PJ_EINVALIDOP);
+    TEST_ASSERT(used_after < used);
+
+    std::cout << "  deferredRespondAfterDelete: PASSED\n";
+}
+
+
+/*****************************************************************************
+ * Test 6: digestToPj
+ *
+ * toPj() copies every field and parameter into the pool, so the result
+ * stays valid after the pjsua2 object is gone.
+ *****************************************************************************/
+void AuthChallengeTests::digestToPj()
+{
+    std::cout << "\n=== AUTH TEST: digestToPj ===\n";
+
+    pj_pool_t *pool = pjsua_pool_create("digest-topj", 512, 512);
+    pjsip_digest_challenge chal;
+    pjsip_digest_credential cred;
+    const pj_str_t name_a = pj_str((char*)"x-a");
+    const pj_str_t name_b = pj_str((char*)"x-b");
+    pjsip_param *param;
+
+    TEST_ASSERT(pool != NULL);
+    {
+        DigestChallenge dc;
+        dc.realm = "test";
+        dc.nonce = "testnonce";
+        dc.stale = 1;
+        dc.otherParam["x-a"] = "1";
+        dc.otherParam["x-b"] = "2";
+        dc.toPj(pool, chal);
+
+        DigestCredential dcred;
+        dcred.realm = "test";
+        dcred.username = TEST_USER;
+        dcred.otherParam["x-a"] = "3";
+        dcred.otherParam["x-b"] = "4";
+        dcred.toPj(pool, cred);
+    }
+
+    TEST_ASSERT(pj_strcmp2(&chal.realm, "test") == 0);
+    TEST_ASSERT(pj_strcmp2(&chal.nonce, "testnonce") == 0);
+    TEST_ASSERT(chal.stale == 1);
+    TEST_ASSERT(pj_list_size(&chal.other_param) == 2);
+    param = pjsip_param_find(&chal.other_param, &name_a);
+    TEST_ASSERT(param && pj_strcmp2(&param->value, "1") == 0);
+    param = pjsip_param_find(&chal.other_param, &name_b);
+    TEST_ASSERT(param && pj_strcmp2(&param->value, "2") == 0);
+
+    TEST_ASSERT(chal.domain.ptr == NULL && chal.domain.slen == 0);
+
+    TEST_ASSERT(pj_strcmp2(&cred.realm, "test") == 0);
+    TEST_ASSERT(pj_strcmp2(&cred.username, TEST_USER) == 0);
+    TEST_ASSERT(cred.cnonce.ptr == NULL && cred.cnonce.slen == 0);
+    TEST_ASSERT(pj_list_size(&cred.other_param) == 2);
+    param = pjsip_param_find(&cred.other_param, &name_a);
+    TEST_ASSERT(param && pj_strcmp2(&param->value, "3") == 0);
+    param = pjsip_param_find(&cred.other_param, &name_b);
+    TEST_ASSERT(param && pj_strcmp2(&param->value, "4") == 0);
+
+    pj_pool_release(pool);
+
+    std::cout << "  digestToPj: PASSED\n";
+}
+
+
+/*****************************************************************************
+ * Test 7: credAuthOtherParam
+ *
+ * Account has an AKA credential. 401 with AKAv1-MD5 -> onCredAuth adds
+ * a parameter to the credential. Expect it in the Authorization header.
+ *****************************************************************************/
+void AuthChallengeTests::credAuthOtherParam()
+{
+    std::cout << "\n=== AUTH TEST: credAuthOtherParam ===\n";
+#if PJSIP_HAS_DIGEST_AKA_AUTH && defined(PJ_HAS_SSL_SOCK) && \
+    PJ_HAS_SSL_SOCK != 0 && PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_OPENSSL
+    init_state(ACTION_SYNC_RESPOND);
+    g_mock_chal = "Digest realm=\"test\", nonce=\"testnonce\", "
+                  "algorithm=AKAv1-MD5";
+
+    AccountConfig cfg = make_acc_config(port, false);
+    AuthCredInfo cred("digest", "*", TEST_USER, PJSIP_CRED_DATA_EXT_AKA,
+                      "secret");
+    cred.akaK = "secret";
+    cfg.sipConfig.authCreds.push_back(PJSUA2_MOVE(cred));
+
+    std::unique_ptr<TestAccount> acc(new TestAccount);
+    acc->create(cfg);
+    acc->setRegistration(true);
+
+    poll_events(30000);
+
+    TEST_ASSERT(g_state.regDone == true);
+    TEST_ASSERT(g_state.regCode == 200);
+    TEST_ASSERT(g_mock_auth_count >= 1);
+    TEST_ASSERT(g_mock_auth_param == "value1");
+
+    g_mock_enabled = PJ_FALSE;
+    g_state.deferEnabled = false;
+    acc.reset();
+    pjsua_handle_events(500);
+
+    std::cout << "  credAuthOtherParam: PASSED\n";
+#else
+    std::cout << "  credAuthOtherParam: SKIPPED (needs AKA and OpenSSL)\n";
+#endif
 }
