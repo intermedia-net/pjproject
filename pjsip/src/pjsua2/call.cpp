@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2013 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2012-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -446,6 +446,7 @@ struct call_param
     pjsua_call_setting *p_opt;
     pj_str_t           *p_reason;
     pjmedia_sdp_session *sdp;
+    pj_status_t         sdp_status;
 
 public:
     /**
@@ -476,6 +477,7 @@ call_param::call_param(const SipTxOption &tx_option)
     p_opt = NULL;
     p_reason = NULL;
     sdp = NULL;
+    sdp_status = PJ_SUCCESS;
 }
 
 call_param::call_param(const SipTxOption &tx_option, const CallSetting &setting,
@@ -500,19 +502,23 @@ call_param::call_param(const SipTxOption &tx_option, const CallSetting &setting,
     p_reason = (reason.slen == 0? NULL: &reason);
 
     sdp = NULL;
+    sdp_status = PJ_SUCCESS;
     if (pool != NULL && sdp_str != "") {
-        pj_str_t dup_pj_sdp;
-        pj_str_t pj_sdp_str = {(char*)sdp_str.c_str(),
-                               (pj_ssize_t)sdp_str.size()};
-        pj_status_t status;
-
-        pj_strdup(pool, &dup_pj_sdp, &pj_sdp_str);        
-        status = pjmedia_sdp_parse(pool, dup_pj_sdp.ptr,
-                                   dup_pj_sdp.slen, &sdp);
-        if (status != PJ_SUCCESS) {
-            PJ_PERROR(4,(THIS_FILE, status,
+        sdp_status = parseCallSdp(pool, sdp_str, &sdp);
+        if (sdp_status != PJ_SUCCESS) {
+            PJ_PERROR(4,(THIS_FILE, sdp_status,
                          "Failed to parse SDP for call param"));
         }
+    }
+}
+
+PoolGuard::PoolGuard(const char *name, const char *operation)
+: pool_(NULL)
+{
+    if (name) {
+        pool_ = pjsua_pool_create(name, 2048, 512);
+        if (!pool_)
+            PJSUA2_RAISE_ERROR2(PJ_ENOMEM, operation);
     }
 }
 
@@ -525,18 +531,22 @@ Call::Call(Account& account, int call_id)
 
 Call::~Call()
 {
-    /* Remove reference to this instance from PJSUA library */
-    if (id != PJSUA_INVALID_ID)
-        pjsua_call_set_user_data(id, NULL);
+    pjsua_state state;
 
-    /*
-     * If this instance is deleted, also hangup the corresponding call in
-     * PJSUA library.
+    if (id == PJSUA_INVALID_ID)
+        return;
+
+    /* Remove reference to this instance from PJSUA library, and hangup the
+     * call if it is still active. A call that has reused the slot is left
+     * alone.
      */
-    if (pjsua_get_state() < PJSUA_STATE_CLOSING && isActive()) {
+    pjsua_call_release_owner(id, this);
+
+    /* The call's disconnection won't reach this object to clear them */
+    state = pjsua_get_state();
+    if (state > PJSUA_STATE_NULL && state < PJSUA_STATE_CLOSING) {
         try {
-            CallOpParam prm;
-            hangup(prm);
+            clearMedias();
         } catch (Error &err) {
             // Ignore
             PJ_UNUSED_ARG(err);
@@ -752,27 +762,31 @@ void Call::makeCall(const string &dst_uri, const CallOpParam &prm)
                     PJSUA2_THROW(Error)
 {
     pj_str_t pj_dst_uri = str2Pj(dst_uri);
-    call_param param(prm.txOption, prm.opt, prm.reason);
-    
-    PJSUA2_CHECK_EXPR( pjsua_call_make_call(acc->getId(), &pj_dst_uri,
-                                            param.p_opt, this,
-                                            param.p_msg_data, &id) );
+    PoolGuard pool_guard(prm.sdp.wholeSdp.empty()? NULL: "tmp-make-call",
+                         "Call::makeCall()");
+
+    call_param param(prm.txOption, prm.opt, prm.reason,
+                     pool_guard.get(), prm.sdp.wholeSdp);
+    pjsua_call_op_param op_param;
+    PJSUA2_CHECK_RAISE_ERROR2(param.sdp_status, "Call::makeCall()");
+
+    pjsua_call_op_param_default(&op_param);
+    op_param.opt = param.p_opt;
+    op_param.sdp = param.sdp;
+    op_param.user_data = this;
+    op_param.msg_data = param.p_msg_data;
+    PJSUA2_CHECK_EXPR( pjsua_call_make_call2(acc->getId(), &pj_dst_uri,
+                                             &op_param, &id) );
 }
 
 void Call::answer(const CallOpParam &prm) PJSUA2_THROW(Error)
 {
-    pj_pool_t *tmp_pool = NULL;
-    
-    /* Create temporary pool for SDP operations if SDP is provided */
-    if (!prm.sdp.wholeSdp.empty()) {
-        tmp_pool = pjsua_pool_create("tmp-answer", 2048, 512);
-        if (!tmp_pool) {
-            PJSUA2_RAISE_ERROR2(PJ_ENOMEM, "Call::answer()");
-        }
-    }
-    
+    PoolGuard pool_guard(prm.sdp.wholeSdp.empty()? NULL: "tmp-answer",
+                         "Call::answer()");
+
     call_param param(prm.txOption, prm.opt, prm.reason,
-                     tmp_pool, prm.sdp.wholeSdp);
+                     pool_guard.get(), prm.sdp.wholeSdp);
+    PJSUA2_CHECK_RAISE_ERROR2(param.sdp_status, "Call::answer()");
     
     if (param.sdp) {
         PJSUA2_CHECK_EXPR( pjsua_call_answer_with_sdp(id, param.sdp,
@@ -786,10 +800,6 @@ void Call::answer(const CallOpParam &prm) PJSUA2_THROW(Error)
                                               param.p_msg_data) );
     }
     
-    /* Release temporary pool */
-    if (tmp_pool) {
-        pj_pool_release(tmp_pool);
-    }
 }
 
 void Call::hangup(const CallOpParam &prm) PJSUA2_THROW(Error)
@@ -798,6 +808,41 @@ void Call::hangup(const CallOpParam &prm) PJSUA2_THROW(Error)
     
     PJSUA2_CHECK_EXPR( pjsua_call_hangup(id, prm.statusCode, param.p_reason,
                                          param.p_msg_data) );
+}
+
+void Call::sendAck(int cseq, const SdpSession &sdp)
+                   PJSUA2_THROW(Error)
+{
+    pj_pool_t *tmp_pool = NULL;
+    pjmedia_sdp_session *pj_sdp = NULL;
+    pj_status_t status = PJ_SUCCESS;
+
+    if (!sdp.wholeSdp.empty()) {
+        tmp_pool = pjsua_pool_create("tmp-sendack", 2048, 512);
+        if (!tmp_pool) {
+            PJSUA2_RAISE_ERROR2(PJ_ENOMEM, "Call::sendAck()");
+        }
+
+        pj_str_t dup_pj_sdp;
+        pj_str_t pj_sdp_str = {(char*)sdp.wholeSdp.c_str(),
+                               (pj_ssize_t)sdp.wholeSdp.size()};
+
+        pj_strdup(tmp_pool, &dup_pj_sdp, &pj_sdp_str);
+        status = pjmedia_sdp_parse(tmp_pool, dup_pj_sdp.ptr,
+                                   dup_pj_sdp.slen, &pj_sdp);
+        if (status != PJ_SUCCESS) {
+            pj_pool_release(tmp_pool);
+            PJSUA2_RAISE_ERROR2(status, "Call::sendAck()");
+        }
+    }
+
+    status = pjsua_call_send_ack(id, cseq, pj_sdp);
+
+    if (tmp_pool) {
+        pj_pool_release(tmp_pool);
+    }
+
+    PJSUA2_CHECK_RAISE_ERROR2(status, "Call::sendAck()");
 }
 
 void Call::setHold(const CallOpParam &prm) PJSUA2_THROW(Error)
@@ -810,18 +855,36 @@ void Call::setHold(const CallOpParam &prm) PJSUA2_THROW(Error)
 
 void Call::reinvite(const CallOpParam &prm) PJSUA2_THROW(Error)
 {
-    call_param param(prm.txOption, prm.opt, prm.reason);
+    PoolGuard pool_guard(prm.sdp.wholeSdp.empty()? NULL: "tmp-reinvite",
+                         "Call::reinvite()");
 
-    PJSUA2_CHECK_EXPR( pjsua_call_reinvite2(id, param.p_opt,
-                                            param.p_msg_data) );
+    call_param param(prm.txOption, prm.opt, prm.reason,
+                     pool_guard.get(), prm.sdp.wholeSdp);
+    pjsua_call_op_param op_param;
+    PJSUA2_CHECK_RAISE_ERROR2(param.sdp_status, "Call::reinvite()");
+
+    pjsua_call_op_param_default(&op_param);
+    op_param.opt = param.p_opt;
+    op_param.sdp = param.sdp;
+    op_param.msg_data = param.p_msg_data;
+    PJSUA2_CHECK_EXPR( pjsua_call_reinvite3(id, &op_param) );
 }
 
 void Call::update(const CallOpParam &prm) PJSUA2_THROW(Error)
 {
-    call_param param(prm.txOption, prm.opt, prm.reason);
-    
-    PJSUA2_CHECK_EXPR( pjsua_call_update2(id, param.p_opt,
-                                          param.p_msg_data) );
+    PoolGuard pool_guard(prm.sdp.wholeSdp.empty()? NULL: "tmp-update",
+                         "Call::update()");
+
+    call_param param(prm.txOption, prm.opt, prm.reason,
+                     pool_guard.get(), prm.sdp.wholeSdp);
+    pjsua_call_op_param op_param;
+    PJSUA2_CHECK_RAISE_ERROR2(param.sdp_status, "Call::update()");
+
+    pjsua_call_op_param_default(&op_param);
+    op_param.opt = param.p_opt;
+    op_param.sdp = param.sdp;
+    op_param.msg_data = param.p_msg_data;
+    PJSUA2_CHECK_EXPR( pjsua_call_update3(id, &op_param) );
 }
 
 void Call::xfer(const string &dest, const CallOpParam &prm)
@@ -1011,22 +1074,26 @@ MediaTransportInfo Call::getMedTransportInfo(unsigned med_idx) const
     return mti;
 }
 
+void Call::clearMedias()
+{
+    unsigned mi;
+
+    for (mi = 0; mi < medias.size(); mi++) {
+        if (medias[mi]) {
+            Endpoint::instance().mediaRemove((AudioMedia &)*medias[mi]);
+            delete medias[mi];
+        }
+    }
+    medias.clear();
+}
+
 void Call::processMediaUpdate(OnCallMediaStateParam &prm)
 {
     pjsua_call_info pj_ci;
     unsigned mi;
     
     if (pjsua_call_get_info(id, &pj_ci) == PJ_SUCCESS) {
-        if (medias.size()) {
-            /* Clear medias. */
-            for (mi = 0; mi < medias.size(); mi++) {
-                if (medias[mi]) {
-                    Endpoint::instance().mediaRemove((AudioMedia&)*medias[mi]);
-                    delete medias[mi];
-                }
-            }
-            medias.clear();     
-        }
+        clearMedias();
 
         for (mi = 0; mi < pj_ci.media_cnt; mi++) {
             if (mi >= medias.size()) {
@@ -1082,14 +1149,7 @@ void Call::processStateChange(OnCallStateParam &prm)
             }
         }
 
-        /* Clear medias. */
-        for (mi = 0; mi < medias.size(); mi++) {
-            if (medias[mi]) {
-                Endpoint::instance().mediaRemove((AudioMedia &)*medias[mi]);
-                delete medias[mi];
-            }
-        }
-        medias.clear();
+        clearMedias();
 
         /* Remove this Call object association */
         pjsua_call_set_user_data(id, NULL);

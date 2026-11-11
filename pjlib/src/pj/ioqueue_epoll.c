@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -472,9 +472,14 @@ PJ_DEF(pj_status_t) pj_ioqueue_register_sock2(pj_pool_t *pool,
 
     /* Set socket to nonblocking. */
     value = 1;
+#if defined(PJ_SOCK_NONBLOCK_USE_FCNTL) && PJ_SOCK_NONBLOCK_USE_FCNTL != 0
+    PJ_UNUSED_ARG(value);
+    if ((rc=fcntl_set_nonblock(sock)) < 0) {
+#else
     if ((rc=os_ioctl(sock, FIONBIO, (ioctl_val_type)&value))) {
-        TRACE_((THIS_FILE, "pj_ioqueue_register_sock error: ioctl rc=%d", 
-                rc));
+#endif
+        TRACE_((THIS_FILE, "pj_ioqueue_register_sock error: set nonblocking "
+                "rc=%d", rc));
         status = pj_get_netos_error();
         goto on_return;
     }
@@ -934,7 +939,7 @@ PJ_DEF(int) pj_ioqueue_poll( pj_ioqueue_t *ioqueue, const pj_time_val *timeout)
              * connecting, report it as such.  If not, just report it as a
              * read event and the higher layers will handle it.
              */
-            if (h->connecting) {
+            if (key_has_pending_connect(h)) {
 #if PJ_IOQUEUE_HAS_SAFE_UNREG
                 increment_counter(h);
 #endif
@@ -1012,10 +1017,18 @@ PJ_DEF(int) pj_ioqueue_poll( pj_ioqueue_t *ioqueue, const pj_time_val *timeout)
                                                           queue[i].key);
 
                 break;
+#if PJ_HAS_TCP
             case EXCEPTION_EVENT:
                 event_done = ioqueue_dispatch_exception_event(ioqueue,
                                                               queue[i].key);
                 break;
+#else
+            case EXCEPTION_EVENT:
+                /* Not reachable: only a key with a pending connect()
+                 * queues this, and without TCP pj_ioqueue_connect() never
+                 * leaves a key in that state.
+                 */
+#endif
             case NO_EVENT:
                 pj_assert(!"Invalid event!");
                 break;

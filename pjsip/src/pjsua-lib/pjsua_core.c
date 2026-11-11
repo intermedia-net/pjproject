@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -130,6 +130,8 @@ PJ_DEF(void) pjsua_config_default(pjsua_config *cfg)
     pjsua_srtp_opt_default(&cfg->srtp_opt);
     cfg->no_refer_sub = PJ_TRUE;
     cfg->acc_server_affinity_default = PJSUA_ACC_SERVER_AFFINITY_DEFAULT;
+    cfg->server_failover = PJSIP_SERVER_FAILOVER;
+    cfg->resolver_fallback = PJ_DNS_RESOLVER_SYS_FALLBACK;
 }
 
 PJ_DEF(void) pjsua_config_dup(pj_pool_t *pool,
@@ -147,6 +149,12 @@ PJ_DEF(void) pjsua_config_dup(pj_pool_t *pool,
 
     for (i=0; i<src->cred_count; ++i) {
         pjsip_cred_dup(pool, &dst->cred_info[i], &src->cred_info[i]);
+    }
+
+    for (i=0; i<src->nameserver_count && i<PJ_ARRAY_SIZE(dst->nameserver);
+         ++i)
+    {
+        pj_strdup_with_null(pool, &dst->nameserver[i], &src->nameserver[i]);
     }
 
     pj_strdup_with_null(pool, &dst->user_agent, &src->user_agent);
@@ -441,6 +449,7 @@ PJ_DEF(void) pjsua_media_config_default(pjsua_media_config *cfg)
     cfg->audio_frame_ptime = PJSUA_DEFAULT_AUDIO_FRAME_PTIME;
     cfg->max_media_ports = PJSUA_MAX_CONF_PORTS;
     cfg->conf_threads = PJMEDIA_CONF_THREADS;
+    cfg->conf_thread_prio = PJMEDIA_CONF_THREAD_PRIO_MAX;
     cfg->has_ioqueue = PJ_TRUE;
     cfg->thread_cnt = 1;
     cfg->quality = PJSUA_DEFAULT_CODEC_QUALITY;
@@ -1057,6 +1066,15 @@ PJ_DEF(pj_status_t) pjsua_create(void)
         return status;
     }
 
+    status = pj_mutex_create_simple(pjsua_var.pool, "pjsua_call_owner",
+                                    &pjsua_var.call_owner_mutex);
+    if (status != PJ_SUCCESS) {
+        pj_log_pop_indent();
+        pjsua_perror(THIS_FILE, "Unable to create mutex", status);
+        pjsua_destroy();
+        return status;
+    }
+
     pjsua_set_state(PJSUA_STATE_CREATED);
     pj_log_pop_indent();
     return PJ_SUCCESS;
@@ -1070,6 +1088,151 @@ static void upnp_cb(pj_status_t status)
     pjsua_var.upnp_status = status;
 }
 #endif
+
+#if PJSIP_HAS_RESOLVER
+
+#define MAX_NAMESERVERS     PJ_ARRAY_SIZE(pjsua_var.ua_cfg.nameserver)
+
+typedef struct nameserver_list
+{
+    unsigned        count;
+    pj_str_t        entry[MAX_NAMESERVERS];
+    pj_str_t        addr[MAX_NAMESERVERS];
+    pj_uint16_t     port[MAX_NAMESERVERS];
+    char            addr_buf[MAX_NAMESERVERS][PJ_INET6_ADDRSTRLEN];
+} nameserver_list;
+
+/* May block to resolve hostnames, so call it without holding the lock */
+static pj_status_t parse_nameservers(unsigned count, const pj_str_t srv[],
+                                     nameserver_list *ns)
+{
+    unsigned i;
+
+    PJ_ASSERT_RETURN(count == 0 || srv, PJ_EINVAL);
+
+    if (count > MAX_NAMESERVERS)
+        return PJ_ETOOMANY;
+
+    ns->count = 0;
+    for (i = 0; i < count; ++i) {
+        pj_str_t host;
+        pj_uint16_t port;
+        pj_sockaddr addr;
+        int af;
+        pj_status_t status;
+
+        status = pj_sockaddr_parse2(pj_AF_UNSPEC(), 0, &srv[i], &host,
+                                    &port, &af);
+        if (status == PJ_SUCCESS && host.slen == 0)
+            status = PJ_EINVAL;
+        if (status == PJ_SUCCESS) {
+            status = pj_sockaddr_init(af, &addr, &host, 0);
+            if (status != PJ_SUCCESS && af == pj_AF_INET())
+                status = pj_sockaddr_init(pj_AF_INET6(), &addr, &host, 0);
+        }
+        if (status != PJ_SUCCESS) {
+            PJ_PERROR(2,(THIS_FILE, status, "Ignoring invalid nameserver %.*s",
+                         (int)srv[i].slen, srv[i].ptr));
+            continue;
+        }
+
+        ns->entry[ns->count] = srv[i];
+        pj_sockaddr_print(&addr, ns->addr_buf[ns->count],
+                          sizeof(ns->addr_buf[0]), 0);
+        ns->addr[ns->count] = pj_str(ns->addr_buf[ns->count]);
+        ns->port[ns->count] = (pj_uint16_t)(port ? port : 53);
+        ++ns->count;
+    }
+
+    return (count && !ns->count) ? PJLIB_UTIL_EDNSINNSADDR : PJ_SUCCESS;
+}
+
+static pj_status_t apply_nameservers(const nameserver_list *ns)
+{
+    pj_dns_resolver *res = pjsua_var.resolver;
+    pj_bool_t created = PJ_FALSE;
+    unsigned i;
+    pj_status_t status;
+
+    if (ns->count == 0) {
+        /* Only detach it, STUN, TURN and ICE may still use the resolver */
+        if (res) {
+            pjsip_endpt_set_resolver(pjsua_var.endpt, NULL);
+            pjsua_var.resolver_detached = res;
+            pjsua_var.resolver = NULL;
+            PJ_LOG(4,(THIS_FILE, "DNS resolver disabled"));
+        }
+        pjsua_var.ua_cfg.nameserver_count = 0;
+        return PJ_SUCCESS;
+    }
+
+    if (!res)
+        res = pjsua_var.resolver_detached;
+    if (!res) {
+        pj_dns_settings st;
+
+        status = pjsip_endpt_create_resolver(pjsua_var.endpt, &res);
+        if (status != PJ_SUCCESS)
+            return status;
+        created = PJ_TRUE;
+
+        pj_dns_resolver_get_settings(res, &st);
+        st.sys_fallback = pjsua_var.ua_cfg.resolver_fallback;
+        pj_dns_resolver_set_settings(res, &st);
+    }
+
+    status = pj_dns_resolver_set_ns(res, ns->count, ns->addr, ns->port);
+    if (status == PJ_SUCCESS) {
+        /* The answers may be specific to the previous network */
+        pj_dns_resolver_clear_cache(res);
+    }
+    if (status == PJ_SUCCESS && res != pjsua_var.resolver)
+        status = pjsip_endpt_set_resolver(pjsua_var.endpt, res);
+    if (status != PJ_SUCCESS) {
+        if (created)
+            pj_dns_resolver_destroy(res, PJ_FALSE);
+        return status;
+    }
+
+    pjsua_var.resolver = res;
+    pjsua_var.resolver_detached = NULL;
+
+    for (i = 0; i < ns->count; ++i) {
+        if (pj_strcmp(&pjsua_var.ua_cfg.nameserver[i], &ns->entry[i])) {
+            pj_strdup_with_null(pjsua_var.pool,
+                                &pjsua_var.ua_cfg.nameserver[i],
+                                &ns->entry[i]);
+        }
+        PJ_LOG(4,(THIS_FILE, "Nameserver %.*s added",
+                  (int)ns->entry[i].slen, ns->entry[i].ptr));
+    }
+    pjsua_var.ua_cfg.nameserver_count = ns->count;
+
+    return PJ_SUCCESS;
+}
+
+/* No new lookups with the system resolver once destroying starts */
+static void stop_resolver_fallback(void)
+{
+    pj_dns_resolver *res[2];
+    unsigned i;
+
+    res[0] = pjsua_var.resolver;
+    res[1] = pjsua_var.resolver_detached;
+    for (i = 0; i < PJ_ARRAY_SIZE(res); ++i) {
+        pj_dns_settings st;
+
+        if (!res[i])
+            continue;
+        pj_dns_resolver_get_settings(res[i], &st);
+        if (st.sys_fallback) {
+            st.sys_fallback = PJ_FALSE;
+            pj_dns_resolver_set_settings(res[i], &st);
+        }
+    }
+}
+
+#endif  /* PJSIP_HAS_RESOLVER */
 
 /*
  * Initialize pjsua with the specified settings. All the settings are 
@@ -1105,6 +1268,11 @@ PJ_DEF(pj_status_t) pjsua_init( const pjsua_config *ua_cfg,
                       PJ_ARRAY_SIZE(ua_cfg->outbound_proxy),
                       { status = PJ_EINVAL; goto on_error; });
 
+    if (ua_cfg->nameserver_count > PJ_ARRAY_SIZE(ua_cfg->nameserver)) {
+        status = PJ_ETOOMANY;
+        goto on_error;
+    }
+
     /* Initialize logging first so that info/errors can be captured */
     if (log_cfg) {
         status = pjsua_reconfigure_logging(log_cfg);
@@ -1120,49 +1288,6 @@ PJ_DEF(pj_status_t) pjsua_init( const pjsua_config *ua_cfg,
         pj_activesock_enable_iphone_os_bg(PJ_FALSE);
     }
 #endif
-
-    /* If nameserver is configured, create DNS resolver instance and
-     * set it to be used by SIP resolver.
-     */
-    if (ua_cfg->nameserver_count) {
-#if PJSIP_HAS_RESOLVER
-        unsigned ii;
-
-        /* Create DNS resolver */
-        status = pjsip_endpt_create_resolver(pjsua_var.endpt, 
-                                             &pjsua_var.resolver);
-        if (status != PJ_SUCCESS) {
-            pjsua_perror(THIS_FILE, "Error creating resolver", status);
-            goto on_error;
-        }
-
-        /* Configure nameserver for the DNS resolver */
-        status = pj_dns_resolver_set_ns(pjsua_var.resolver, 
-                                        ua_cfg->nameserver_count,
-                                        ua_cfg->nameserver, NULL);
-        if (status != PJ_SUCCESS) {
-            pjsua_perror(THIS_FILE, "Error setting nameserver", status);
-            goto on_error;
-        }
-
-        /* Set this DNS resolver to be used by the SIP resolver */
-        status = pjsip_endpt_set_resolver(pjsua_var.endpt, pjsua_var.resolver);
-        if (status != PJ_SUCCESS) {
-            pjsua_perror(THIS_FILE, "Error setting DNS resolver", status);
-            goto on_error;
-        }
-
-        /* Print nameservers */
-        for (ii=0; ii<ua_cfg->nameserver_count; ++ii) {
-            PJ_LOG(4,(THIS_FILE, "Nameserver %.*s added",
-                      (int)ua_cfg->nameserver[ii].slen,
-                      ua_cfg->nameserver[ii].ptr));
-        }
-#else
-        PJ_LOG(2,(THIS_FILE, 
-                  "DNS resolver is disabled (PJSIP_HAS_RESOLVER==0)"));
-#endif
-    }
 
     /* Init SIP UA: */
 
@@ -1261,6 +1386,38 @@ PJ_DEF(pj_status_t) pjsua_init( const pjsua_config *ua_cfg,
     status = pjsua_call_subsys_init(ua_cfg);
     if (status != PJ_SUCCESS)
         goto on_error;
+
+    /* A setting other than the default applies, the default keeps what
+     * the application may have set itself. The previous value is kept
+     * for pjsua_destroy(), which restores it only when it was applied.
+     */
+    if (pjsua_var.ua_cfg.server_failover != PJSIP_SERVER_FAILOVER) {
+        pjsua_var.prev_server_failover = pjsip_cfg()->endpt.server_failover;
+        pjsip_cfg()->endpt.server_failover = pjsua_var.ua_cfg.server_failover;
+        pjsua_var.server_failover_applied = PJ_TRUE;
+    }
+
+    /* If nameserver is configured, create DNS resolver instance and
+     * set it to be used by SIP resolver. Done after the config copy
+     * above, since it updates the nameserver list there.
+     */
+    if (ua_cfg->nameserver_count) {
+#if PJSIP_HAS_RESOLVER
+        nameserver_list ns;
+
+        status = parse_nameservers(ua_cfg->nameserver_count,
+                                   ua_cfg->nameserver, &ns);
+        if (status == PJ_SUCCESS)
+            status = apply_nameservers(&ns);
+        if (status != PJ_SUCCESS) {
+            pjsua_perror(THIS_FILE, "Error setting nameserver", status);
+            goto on_error;
+        }
+#else
+        PJ_LOG(2,(THIS_FILE,
+                  "DNS resolver is disabled (PJSIP_HAS_RESOLVER==0)"));
+#endif
+    }
 
     /* Convert deprecated STUN settings */
     if (pjsua_var.ua_cfg.stun_srv_cnt==0) {
@@ -1749,6 +1906,44 @@ PJ_DEF(pj_status_t) pjsua_update_stun_servers(unsigned count, pj_str_t srv[],
 
 
 /*
+ * Update nameservers.
+ */
+PJ_DEF(pj_status_t) pjsua_update_nameservers(unsigned count,
+                                             const pj_str_t srv[])
+{
+#if PJSIP_HAS_RESOLVER
+    nameserver_list ns;
+    pj_status_t status;
+
+    status = parse_nameservers(count, srv, &ns);
+    if (status != PJ_SUCCESS)
+        return status;
+
+    PJSUA_LOCK();
+    if (pjsua_var.state < PJSUA_STATE_INIT ||
+        pjsua_var.state >= PJSUA_STATE_CLOSING)
+    {
+        status = PJ_EINVALIDOP;
+    } else if (pjsip_endpt_get_resolver(pjsua_var.endpt) !=
+               pjsua_var.resolver)
+    {
+        /* The application has replaced the resolver of the endpoint */
+        status = PJ_EINVALIDOP;
+    } else {
+        status = apply_nameservers(&ns);
+    }
+    PJSUA_UNLOCK();
+
+    return status;
+#else
+    PJ_UNUSED_ARG(count);
+    PJ_UNUSED_ARG(srv);
+    return PJ_EINVALIDOP;
+#endif
+}
+
+
+/*
  * Resolve STUN server.
  */
 PJ_DEF(pj_status_t) pjsua_resolve_stun_servers( unsigned count,
@@ -1988,7 +2183,12 @@ PJ_DEF(pj_status_t) pjsua_destroy2(unsigned flags)
 
     /* Signal threads to quit: */
     pjsua_stop_worker_threads();
-    
+
+#if PJSIP_HAS_RESOLVER
+    /* Unregistering starts no lookup with the system resolver */
+    stop_resolver_fallback();
+#endif
+
     if (pjsua_var.endpt) {
         unsigned max_wait;
 
@@ -2152,6 +2352,12 @@ PJ_DEF(pj_status_t) pjsua_destroy2(unsigned flags)
         /* Destroy media (to shutdown media endpoint, etc) */
         pjsua_media_subsys_destroy(flags);
 
+        /* The endpoint only destroys the resolver that is attached to it */
+        if (pjsua_var.resolver_detached) {
+            pj_dns_resolver_destroy(pjsua_var.resolver_detached, PJ_FALSE);
+            pjsua_var.resolver_detached = NULL;
+        }
+
         /* Must destroy endpoint first before destroying pools in
          * buddies or accounts, since shutting down transaction layer
          * may emit events which trigger some buddy or account callbacks
@@ -2171,6 +2377,11 @@ PJ_DEF(pj_status_t) pjsua_destroy2(unsigned flags)
         /* Destroy accounts */
         for (i=0; i<(int)PJ_ARRAY_SIZE(pjsua_var.acc); ++i) {
             if (pjsua_var.acc[i].pool) {
+                /* The shared auth session's lock lives in the pool. */
+                if (pjsua_var.acc[i].shared_auth_sess.endpt) {
+                    pjsip_auth_clt_deinit(
+                                    &pjsua_var.acc[i].shared_auth_sess);
+                }
                 pj_pool_release(pjsua_var.acc[i].pool);
                 pjsua_var.acc[i].pool = NULL;
             }
@@ -2193,6 +2404,11 @@ PJ_DEF(pj_status_t) pjsua_destroy2(unsigned flags)
     if (pjsua_var.timer_mutex) {
         pj_mutex_destroy(pjsua_var.timer_mutex);
         pjsua_var.timer_mutex = NULL;
+    }
+
+    if (pjsua_var.call_owner_mutex) {
+        pj_mutex_destroy(pjsua_var.call_owner_mutex);
+        pjsua_var.call_owner_mutex = NULL;
     }
 
     /* Destroy pools and pool factory. */
@@ -2218,8 +2434,13 @@ PJ_DEF(pj_status_t) pjsua_destroy2(unsigned flags)
         pj_log_pop_indent();
 
         /* Shutdown PJLIB */
+        pjsua_call_subsys_destroy();
         pj_shutdown();
     }
+
+    /* Only once, pjsua_var is cleared below and this may be called again */
+    if (pjsua_var.server_failover_applied)
+        pjsip_cfg()->endpt.server_failover = pjsua_var.prev_server_failover;
 
     /* Clear pjsua_var */
     pj_bzero(&pjsua_var, sizeof(pjsua_var));
@@ -3142,8 +3363,12 @@ PJ_DEF(pj_status_t) pjsua_transport_lis_start(pjsua_transport_id id,
             addr_name.host = cfg->public_addr;
 
         if (tp_type == PJSIP_TRANSPORT_TCP) {
+#if defined(PJ_HAS_TCP) && PJ_HAS_TCP!=0
             status = pjsip_tcp_transport_lis_start(factory, &bind_addr,
                                                    &addr_name);
+#else
+            status = PJ_ENOTSUP;
+#endif
         }
 #if defined(PJSIP_HAS_TLS_TRANSPORT) && PJSIP_HAS_TLS_TRANSPORT!=0
         else {
@@ -3217,8 +3442,13 @@ PJ_DEF(pj_status_t) pjsua_transport_lis_restart(pjsua_transport_id id,
         pjsip_tpfactory *factory = pjsua_var.tpdata[id].data.factory;
         
         if (tp_type == PJSIP_TRANSPORT_TCP) {
+#if defined(PJ_HAS_TCP) && PJ_HAS_TCP!=0
             status = pjsip_tcp_transport_restart(factory, &bind_addr,
                                                  &addr_name);
+#else
+            PJ_UNUSED_ARG(factory);
+            status = PJ_ENOTSUP;
+#endif
         }
 #if defined(PJSIP_HAS_TLS_TRANSPORT) && PJSIP_HAS_TLS_TRANSPORT!=0
         else {
@@ -3923,7 +4153,8 @@ static pj_status_t handle_ip_change_on_acc()
             pjsip_regc_get_info(acc->regc, &regc_info);
 
             /* Check if transport restart listener succeed. */
-            for (; j < PJ_ARRAY_SIZE(pjsua_var.tpdata); ++j) {
+            for (; regc_info.transport != NULL &&
+                   j < PJ_ARRAY_SIZE(pjsua_var.tpdata); ++j) {
                 if (pjsua_var.tpdata[j].data.ptr != NULL &&
                   pjsua_var.tpdata[j].restart_status != PJ_SUCCESS &&
                   pjsua_var.tpdata[j].type == regc_info.transport->key.type)
@@ -4093,6 +4324,7 @@ static pj_status_t restart_listener(pjsua_transport_id id,
                                         NULL);
         break;
 #endif
+#if defined(PJ_HAS_TCP) && PJ_HAS_TCP!=0
     case PJSIP_TRANSPORT_TCP:
     case PJSIP_TRANSPORT_TCP6:
         status = pjsip_tcp_transport_restart(
@@ -4100,6 +4332,7 @@ static pj_status_t restart_listener(pjsua_transport_id id,
                                         &bind_addr,
                                         NULL);
         break;
+#endif
 
     default:
         status = PJ_EINVAL;
@@ -4187,6 +4420,18 @@ PJ_DEF(pj_status_t) pjsua_handle_ip_change(const pjsua_ip_change_param *param)
     }
 
     PJ_LOG(3, (THIS_FILE, "Start handling IP address change"));
+
+    /* The failed servers may work on the new network */
+    pjsip_endpt_clear_failed_servers(pjsua_var.endpt);
+
+#if PJSIP_HAS_RESOLVER
+    /* So may the nameservers marked as bad */
+    {
+        pj_dns_resolver *res = pjsip_endpt_get_resolver(pjsua_var.endpt);
+        if (res)
+            (void)pj_dns_resolver_reset_ns_state(res);
+    }
+#endif
 
     /* Avoid call disconnection due to request timeout. Some requests may
      * be in progress when network is changing, they may eventually get

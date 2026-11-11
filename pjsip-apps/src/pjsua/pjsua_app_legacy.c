@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -741,7 +741,7 @@ static void ui_make_new_call()
         if (app_config.enable_loam) {
             call_opt.flag |= PJSUA_CALL_NO_SDP_OFFER;
         }
-        status = pjsua_call_make_call(current_acc, &tmp, &call_opt, NULL,
+        status = app_make_call(current_acc, &tmp, &call_opt,
                                       &msg_data_, &current_call);
         if (status != PJ_SUCCESS)
             pjsua_perror(THIS_FILE, "Unable to make call", status);
@@ -789,10 +789,12 @@ static void ui_make_multi_call()
     for (i=0; i<my_atoi(menuin); ++i) {
         pj_status_t status;
 
-        status = pjsua_call_make_call(current_acc, &tmp, &call_opt, NULL,
-            NULL, NULL);
-        if (status != PJ_SUCCESS)
+        status = app_make_call(current_acc, &tmp, &call_opt,
+                               NULL, NULL);
+        if (status != PJ_SUCCESS) {
+            pjsua_perror(THIS_FILE, "Unable to make call", status);
             break;
+        }
     }
 }
 
@@ -902,6 +904,7 @@ static void ui_answer_call()
         pj_str_t hname = { "Contact", 7 };
         pj_str_t hvalue;
         pjsip_generic_string_hdr hcontact;
+        pj_status_t status;
 
         if (!simple_input("Answer with code (100-699)", buf, sizeof(buf)))
             return;
@@ -933,7 +936,9 @@ static void ui_answer_call()
             return;
         }
 
-        pjsua_call_answer2(current_call, &call_opt, st_code, NULL, &msg_data_);
+        status = app_answer_call(current_call, &call_opt, st_code, &msg_data_);
+        if (status != PJ_SUCCESS)
+            pjsua_perror(THIS_FILE, "Unable to answer call", status);
     }
 }
 
@@ -1051,6 +1056,9 @@ static void ui_add_account(pjsua_transport_config *rtp_cfg)
 
     acc_cfg.rtp_cfg = *rtp_cfg;
     acc_cfg.txt_red_level = app_config.txt_red_level;
+    acc_cfg.rfc5626_instance_id = app_config.instance_id;
+    if (app_config.outb_disable)
+        acc_cfg.use_rfc5626 = PJ_FALSE;
     app_config_init_video(&acc_cfg);
 
     status = pjsua_acc_add(&acc_cfg, PJ_TRUE, NULL);
@@ -1107,7 +1115,7 @@ static void ui_call_hold()
 static void ui_call_reinvite()
 {
     call_opt.flag |= PJSUA_CALL_UNHOLD;
-    pjsua_call_reinvite2(current_call, &call_opt, NULL);
+    (void)pjsua_call_reinvite2(current_call, &call_opt, NULL);
 }
 
 static void ui_send_update()
@@ -1919,10 +1927,7 @@ void legacy_main(void)
         }
 
         /* Update call setting */
-        pjsua_call_setting_default(&call_opt);
-        call_opt.aud_cnt = app_config.aud_cnt;
-        call_opt.vid_cnt = app_config.vid.vid_cnt;
-        call_opt.txt_cnt = app_config.txt_cnt;
+        app_config_init_call_setting(&call_opt);
 
         switch (menuin[0]) {
 

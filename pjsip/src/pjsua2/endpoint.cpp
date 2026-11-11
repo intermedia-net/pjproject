@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2013 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2013-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -152,28 +152,27 @@ void DigestCredential::fromPj(const pjsip_digest_credential &prm)
     nc = pj2Str(prm.nc);
 }
 
-pjsip_digest_credential DigestCredential::toPj() const
+void DigestCredential::toPj(pj_pool_t *pool,
+                            pjsip_digest_credential &cred) const
 {
-    pjsip_digest_credential credentials;
-    pj_list_init(&credentials.other_param);
-    credentials.realm = str2Pj(realm);
-    credentials.username = str2Pj(username);
+    cred.realm = str2PjDup(pool, realm);
+    cred.username = str2PjDup(pool, username);
+    pj_list_init(&cred.other_param);
     for (std::map<std::string, std::string>::const_iterator it = otherParam.begin(); 
            it != otherParam.end(); ++it) {
-        pjsip_param other_param;
-        other_param.name = str2Pj(it->first);
-        other_param.value = str2Pj(it->second);
-        pj_list_push_back(&credentials.other_param, &other_param);
+        pjsip_param *p = PJ_POOL_ALLOC_T(pool, pjsip_param);
+        p->name = str2PjDup(pool, it->first);
+        p->value = str2PjDup(pool, it->second);
+        pj_list_push_back(&cred.other_param, p);
     }
-    credentials.nonce = str2Pj(nonce);
-    credentials.uri = str2Pj(uri);
-    credentials.response = str2Pj(response);
-    credentials.algorithm = str2Pj(algorithm);
-    credentials.cnonce = str2Pj(cnonce);
-    credentials.opaque = str2Pj(opaque);
-    credentials.qop = str2Pj(qop);
-    credentials.nc = str2Pj(nc);
-    return credentials;
+    cred.nonce = str2PjDup(pool, nonce);
+    cred.uri = str2PjDup(pool, uri);
+    cred.response = str2PjDup(pool, response);
+    cred.algorithm = str2PjDup(pool, algorithm);
+    cred.cnonce = str2PjDup(pool, cnonce);
+    cred.opaque = str2PjDup(pool, opaque);
+    cred.qop = str2PjDup(pool, qop);
+    cred.nc = str2PjDup(pool, nc);
 }
 
 void DigestChallenge::fromPj(const pjsip_digest_challenge &prm)
@@ -192,25 +191,24 @@ void DigestChallenge::fromPj(const pjsip_digest_challenge &prm)
     qop = pj2Str(prm.qop);
 }
 
-pjsip_digest_challenge DigestChallenge::toPj() const
+void DigestChallenge::toPj(pj_pool_t *pool,
+                           pjsip_digest_challenge &chal) const
 {
-    pjsip_digest_challenge challenge;
-    pj_list_init(&challenge.other_param);
-    challenge.realm = str2Pj(realm);
-    challenge.domain = str2Pj(domain);
+    chal.realm = str2PjDup(pool, realm);
+    chal.domain = str2PjDup(pool, domain);
+    pj_list_init(&chal.other_param);
     for (std::map<std::string, std::string>::const_iterator it = otherParam.begin(); 
            it != otherParam.end(); ++it) {
-        pjsip_param other_param;
-        other_param.name = str2Pj(it->first);
-        other_param.value = str2Pj(it->second);
-        pj_list_push_back(&challenge.other_param, &other_param);
+        pjsip_param *p = PJ_POOL_ALLOC_T(pool, pjsip_param);
+        p->name = str2PjDup(pool, it->first);
+        p->value = str2PjDup(pool, it->second);
+        pj_list_push_back(&chal.other_param, p);
     }
-    challenge.nonce = str2Pj(nonce);
-    challenge.opaque = str2Pj(opaque);
-    challenge.stale = stale;
-    challenge.algorithm = str2Pj(algorithm);
-    challenge.qop = str2Pj(qop);
-    return challenge;
+    chal.nonce = str2PjDup(pool, nonce);
+    chal.opaque = str2PjDup(pool, opaque);
+    chal.stale = stale;
+    chal.algorithm = str2PjDup(pool, algorithm);
+    chal.qop = str2PjDup(pool, qop);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -299,7 +297,8 @@ void OnVideoMediaOpCompletedParam::fromPj(const pjmedia_vid_conf_op_info &info)
 
 ///////////////////////////////////////////////////////////////////////////////
 UaConfig::UaConfig()
-: mainThreadOnly(false)
+: mainThreadOnly(false),
+  enableCallSendAckCallback(false)
 {
     pjsua_config ua_cfg;
 
@@ -334,6 +333,9 @@ void UaConfig::fromPj(const pjsua_config &ua_cfg)
     this->upnpIfName = pj2Str(ua_cfg.upnp_if_name);
     this->noRefersub = PJ2BOOL(ua_cfg.no_refer_sub);
     this->accServerAffinityDefault = PJ2BOOL(ua_cfg.acc_server_affinity_default);
+    this->serverFailover = PJ2BOOL(ua_cfg.server_failover);
+    this->resolverFallback = PJ2BOOL(ua_cfg.resolver_fallback);
+    this->notifyOfferlessReinvite = PJ2BOOL(ua_cfg.notify_offerless_reinvite);
 }
 
 pjsua_config UaConfig::toPj() const
@@ -376,6 +378,9 @@ pjsua_config UaConfig::toPj() const
     pua_cfg.upnp_if_name = str2Pj(this->upnpIfName);
     pua_cfg.no_refer_sub = this->noRefersub;
     pua_cfg.acc_server_affinity_default = this->accServerAffinityDefault;
+    pua_cfg.server_failover = this->serverFailover;
+    pua_cfg.resolver_fallback = this->resolverFallback;
+    pua_cfg.notify_offerless_reinvite = this->notifyOfferlessReinvite;
 
     return pua_cfg;
 }
@@ -398,6 +403,10 @@ void UaConfig::readObject(const ContainerNode &node) PJSUA2_THROW(Error)
     NODE_READ_STRING  ( this_node, upnpIfName);
     NODE_READ_BOOL_OPT( this_node, noRefersub);
     NODE_READ_BOOL_OPT( this_node, accServerAffinityDefault);
+    NODE_READ_BOOL_OPT( this_node, serverFailover);
+    NODE_READ_BOOL_OPT( this_node, resolverFallback);
+    NODE_READ_BOOL_OPT( this_node, enableCallSendAckCallback);
+    NODE_READ_BOOL_OPT( this_node, notifyOfferlessReinvite);
 }
 
 void UaConfig::writeObject(ContainerNode &node) const PJSUA2_THROW(Error)
@@ -418,6 +427,10 @@ void UaConfig::writeObject(ContainerNode &node) const PJSUA2_THROW(Error)
     NODE_WRITE_STRING  ( this_node, upnpIfName);
     NODE_WRITE_BOOL    ( this_node, noRefersub);
     NODE_WRITE_BOOL    ( this_node, accServerAffinityDefault);
+    NODE_WRITE_BOOL    ( this_node, serverFailover);
+    NODE_WRITE_BOOL    ( this_node, resolverFallback);
+    NODE_WRITE_BOOL    ( this_node, enableCallSendAckCallback);
+    NODE_WRITE_BOOL    ( this_node, notifyOfferlessReinvite);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -500,6 +513,7 @@ void MediaConfig::fromPj(const pjsua_media_config &mc)
     this->audioFramePtime = mc.audio_frame_ptime;
     this->maxMediaPorts = mc.max_media_ports;
     this->confThreads = mc.conf_threads;
+    this->confThreadPrio = mc.conf_thread_prio;
     this->hasIoqueue = PJ2BOOL(mc.has_ioqueue);
     this->threadCnt = mc.thread_cnt;
     this->quality = mc.quality;
@@ -534,6 +548,7 @@ pjsua_media_config MediaConfig::toPj() const
     mcfg.audio_frame_ptime = this->audioFramePtime;
     mcfg.max_media_ports = this->maxMediaPorts;
     mcfg.conf_threads = this->confThreads;
+    mcfg.conf_thread_prio = this->confThreadPrio;
     mcfg.has_ioqueue = this->hasIoqueue;
     mcfg.thread_cnt = this->threadCnt;
     mcfg.quality = this->quality;
@@ -587,6 +602,7 @@ void MediaConfig::readObject(const ContainerNode &node) PJSUA2_THROW(Error)
     NODE_READ_INT     ( this_node, sndAutoCloseTime);
     NODE_READ_BOOL    ( this_node, vidPreviewEnableNative);
     NODE_READ_BOOL    ( this_node, sndUseSwClock);
+    NODE_READ_INT_OPT ( this_node, confThreadPrio);
 }
 
 void MediaConfig::writeObject(ContainerNode &node) const PJSUA2_THROW(Error)
@@ -619,6 +635,7 @@ void MediaConfig::writeObject(ContainerNode &node) const PJSUA2_THROW(Error)
     NODE_WRITE_INT     ( this_node, sndAutoCloseTime);
     NODE_WRITE_BOOL    ( this_node, vidPreviewEnableNative);
     NODE_WRITE_BOOL    ( this_node, sndUseSwClock);
+    NODE_WRITE_INT     ( this_node, confThreadPrio);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -943,17 +960,22 @@ void Endpoint::on_incoming_call(pjsua_acc_id acc_id, pjsua_call_id call_id,
     prm.callId = call_id;
     prm.rdata.fromPj(*rdata);
 
+    /* Take over the cloned rdata, the call may be gone after the callback
+     * (e.g. hung up by the application).
+     */
+    pjsip_rx_data *cloned_rdata = call->incoming_data;
+    call->incoming_data = NULL;
+
     acc->onIncomingCall(prm);
 
     /* Free cloned rdata. */
-    pjsip_rx_data_free_cloned(call->incoming_data);
-    call->incoming_data = NULL;
+    pjsip_rx_data_free_cloned(cloned_rdata);
 
     /* disconnect if callback doesn't handle the call */
     pjsua_call_info ci;
 
-    pjsua_call_get_info(call_id, &ci);
-    if (!pjsua_call_get_user_data(call_id) &&
+    if (pjsua_call_get_info(call_id, &ci) == PJ_SUCCESS &&
+        !pjsua_call_get_user_data(call_id) &&
         ci.state != PJSIP_INV_STATE_DISCONNECTED)
     {
         pjsua_call_hangup(call_id, PJSIP_SC_INTERNAL_SERVER_ERROR, NULL, NULL);
@@ -1037,7 +1059,8 @@ void Endpoint::on_incoming_subscribe(pjsua_acc_id acc_id,
     *code = prm.code;
     acc->tmpReason = prm.reason;
     *reason = str2Pj(acc->tmpReason);
-    prm.txOption.toPj(*msg_data);
+    acc->tmpTxOption = prm.txOption;
+    acc->tmpTxOption.toPj(*msg_data);
 }
 
 void Endpoint::on_pager2(pjsua_call_id call_id,
@@ -1184,12 +1207,13 @@ AuthChallenge::~AuthChallenge()
         /* Abandon unconditionally, so the token's group lock reference and
          * the reference it holds on its owner (regc/pubc) are released.
          *
-         * This is safe even after the account has been deleted: no
-         * abandon_impl() reads the auth session, the only field
-         * async_abandon() itself touches is sess->parent -- always NULL for
-         * the account's shared session -- and the token's own group lock
-         * reference keeps its memory readable.  No PJSUA_LOCK is needed,
-         * which also removes any lock-order inversion.
+         * This is safe after the account has been deleted: pjsua
+         * deinitialises the shared auth session before releasing the
+         * account, leaving its parent and lock NULL, no abandon_impl()
+         * reads the auth session, and the token's own group lock
+         * reference keeps its memory readable. Deleting the account
+         * concurrently with this call is not supported. No PJSUA_LOCK is
+         * needed, which also removes any lock-order inversion.
          */
         pjsip_auth_clt_async_abandon(auth_sess_, token_);
     }
@@ -1238,6 +1262,7 @@ pj_status_t AuthChallenge::respond()
         PJSUA_LOCK();
         if (!pjsua_acc_is_valid(acc_id_)) {
             PJSUA_UNLOCK();
+            pjsip_auth_clt_async_abandon(auth_sess_, token_);
             consumed_ = true;
             return PJ_EINVALIDOP;
         }
@@ -1265,15 +1290,8 @@ pj_status_t AuthChallenge::respond()
         PJSUA_UNLOCK();
 
     if (status == PJ_SUCCESS && new_tdata) {
+        /* Consumes the token even on failure, when it may be freed */
         status = pjsip_auth_clt_async_send_req(sess, tok, new_tdata);
-        if (status != PJ_SUCCESS) {
-            /* send_req may fail without consuming the token (e.g. account
-             * deleted between unlock and send) — abandon to release the
-             * token's grp_lock reference.  If the token was already
-             * consumed, abandon will harmlessly return PJ_EINVAL.
-             */
-            pjsip_auth_clt_async_abandon(sess, tok);
-        }
     } else {
         pjsip_auth_clt_async_abandon(sess, tok);
         if (status == PJ_SUCCESS)
@@ -1296,6 +1314,7 @@ pj_status_t AuthChallenge::respond(const AuthCredInfoVector &creds)
         PJSUA_LOCK();
         if (!pjsua_acc_is_valid(acc_id_)) {
             PJSUA_UNLOCK();
+            pjsip_auth_clt_async_abandon(auth_sess_, token_);
             consumed_ = true;
             return PJ_EINVALIDOP;
         }
@@ -1332,11 +1351,11 @@ pj_status_t AuthChallenge::abandon()
     pjsip_auth_clt_sess *sess;
     void *tok;
     if (deferred_) {
-        /* Safe without PJSUA_LOCK and without checking the account: the
-         * token holds a reference on its owner, no abandon_impl() reads
-         * the auth session, and taking PJSUA_LOCK here would risk
-         * lock-order inversion since abandon_impl may run regc/inv
-         * callbacks that acquire the tsx group lock.
+        /* Safe without PJSUA_LOCK and without checking the account (see
+         * ~AuthChallenge): the token holds a reference on its owner, no
+         * abandon_impl() reads the auth session, and taking PJSUA_LOCK
+         * here would risk lock-order inversion since abandon_impl may run
+         * regc/inv callbacks that acquire the tsx group lock.
          */
         sess = auth_sess_;  tok = token_;
     } else {
@@ -1559,6 +1578,30 @@ void Endpoint::on_call_sdp_created(pjsua_call_id call_id,
             pj_memcpy(sdp, new_sdp, sizeof(*sdp));
         }
     }
+}
+
+pj_bool_t Endpoint::on_call_send_ack(pjsua_call_id call_id,
+                                     pjsip_rx_data *rdata)
+{
+    Call *call = Call::lookup(call_id);
+    if (!call) {
+        return PJ_FALSE;
+    }
+
+    OnCallSendAckParam prm;
+    prm.rdata.fromPj(*rdata);
+    prm.cseq = rdata->msg_info.cseq->cseq;
+
+    try {
+        call->onCallSendAck(prm);
+    } catch (Error &err) {
+        PJ_LOG(1,(THIS_FILE, "onCallSendAck() error: %s", err.info().c_str()));
+        return PJ_FALSE;
+    } catch (...) {
+        PJ_LOG(1,(THIS_FILE, "onCallSendAck() threw an unknown exception"));
+        return PJ_FALSE;
+    }
+    return prm.suppressSendAck ? PJ_TRUE : PJ_FALSE;
 }
 
 void Endpoint::on_stream_precreate(pjsua_call_id call_id,
@@ -1802,7 +1845,8 @@ void Endpoint::on_call_transfer_request2(pjsua_call_id call_id,
     call->onCallTransferRequest(prm);
     
     *code = prm.statusCode;
-    *opt = prm.opt.toPj();
+    call->tmpOpt = prm.opt;
+    *opt = call->tmpOpt.toPj();
     if (*code/100 <= 2) {
         if (prm.newCall) {
             /* Sanity checks */
@@ -1870,8 +1914,10 @@ void Endpoint::on_call_replace_request2(pjsua_call_id call_id,
     call->onCallReplaceRequest(prm);
     
     *st_code = prm.statusCode;
-    *st_text = str2Pj(prm.reason);
-    *opt = prm.opt.toPj();
+    call->tmpReason = prm.reason;
+    *st_text = str2Pj(call->tmpReason);
+    call->tmpOpt = prm.opt;
+    *opt = call->tmpOpt.toPj();
     if (prm.newCall && prm.newCall != call) {
         /* Sanity checks */
         pj_assert(prm.newCall->id == PJSUA_INVALID_ID);
@@ -1947,6 +1993,9 @@ void Endpoint::on_call_rx_offer(pjsua_call_id call_id,
                                 pjsip_status_code *code,
                                 pjsua_call_setting *opt)
 {
+    pjmedia_sdp_session *answer;
+    pj_status_t status;
+
     PJ_UNUSED_ARG(reserved);
 
     Call *call = Call::lookup(call_id);
@@ -1955,14 +2004,40 @@ void Endpoint::on_call_rx_offer(pjsua_call_id call_id,
     }
     
     OnCallRxOfferParam prm;
+    bool media_app_managed =
+        (opt->flag & PJSUA_CALL_MEDIA_APP_MANAGED) != 0;
     prm.offer.fromPj(*offer);
     prm.statusCode = *code;
     prm.opt.fromPj(*opt);
     
     call->onCallRxOffer(prm);
+
+    if (!media_app_managed && !prm.answer.wholeSdp.empty()) {
+        PJ_LOG(2,(THIS_FILE, "Ignoring application SDP answer for ordinary "
+                  "call %d", call_id));
+    } else if (prm.statusCode == PJSIP_SC_OK &&
+               !prm.answer.wholeSdp.empty())
+    {
+        try {
+            PoolGuard pool_guard("rx-offer", "onCallRxOffer()");
+            status = parseCallSdp(pool_guard.get(), prm.answer.wholeSdp,
+                                  &answer);
+            if (status == PJ_SUCCESS)
+                status = pjsua_call_set_sdp(call_id, answer);
+        } catch (Error &err) {
+            status = err.status;
+        }
+
+        if (status != PJ_SUCCESS) {
+            PJ_PERROR(1,(THIS_FILE, status,
+                         "Failed to set SDP answer for call %d", call_id));
+            prm.statusCode = PJSIP_SC_NOT_ACCEPTABLE_HERE;
+        }
+    }
     
     *code = prm.statusCode;
-    *opt = prm.opt.toPj();
+    call->tmpOpt = prm.opt;
+    *opt = call->tmpOpt.toPj();
 }
 
 void Endpoint::on_call_rx_reinvite(pjsua_call_id call_id,
@@ -1981,7 +2056,8 @@ void Endpoint::on_call_rx_reinvite(pjsua_call_id call_id,
     }
     
     OnCallRxReinviteParam prm;
-    prm.offer.fromPj(*offer);
+    if (offer)
+        prm.offer.fromPj(*offer);
     prm.rdata.fromPj(*rdata);
     prm.isAsync = PJ2BOOL(*async);
     prm.statusCode = *code;
@@ -1991,7 +2067,8 @@ void Endpoint::on_call_rx_reinvite(pjsua_call_id call_id,
     
     *async = prm.isAsync;
     *code = prm.statusCode;
-    *opt = prm.opt.toPj();
+    call->tmpOpt = prm.opt;
+    *opt = call->tmpOpt.toPj();
 }
 
 void Endpoint::on_call_tx_offer(pjsua_call_id call_id,
@@ -2010,7 +2087,8 @@ void Endpoint::on_call_tx_offer(pjsua_call_id call_id,
 
     call->onCallTxOffer(prm);
 
-    *opt = prm.opt.toPj();
+    call->tmpOpt = prm.opt;
+    *opt = call->tmpOpt.toPj();
 }
 
 pjsip_redirect_op Endpoint::on_call_redirected(pjsua_call_id call_id,
@@ -2210,11 +2288,14 @@ void Endpoint::on_create_media_transport_srtp(pjsua_call_id call_id,
     call->onCreateMediaTransportSrtp(prm);
     
     srtp_opt->use = prm.srtpUse;
-    srtp_opt->crypto_count = (unsigned)prm.cryptos.size();
+    call->tmpCryptos = prm.cryptos;
+    srtp_opt->crypto_count = (unsigned)call->tmpCryptos.size();
+    if (srtp_opt->crypto_count > PJ_ARRAY_SIZE(srtp_opt->crypto))
+        srtp_opt->crypto_count = PJ_ARRAY_SIZE(srtp_opt->crypto);
     for (unsigned i = 0; i < srtp_opt->crypto_count; i++) {
-        srtp_opt->crypto[i].key   = str2Pj(prm.cryptos[i].key);
-        srtp_opt->crypto[i].name  = str2Pj(prm.cryptos[i].name);
-        srtp_opt->crypto[i].flags = prm.cryptos[i].flags;
+        srtp_opt->crypto[i].key   = str2Pj(call->tmpCryptos[i].key);
+        srtp_opt->crypto[i].name  = str2Pj(call->tmpCryptos[i].name);
+        srtp_opt->crypto[i].flags = call->tmpCryptos[i].flags;
     }
 }
 
@@ -2330,6 +2411,9 @@ void Endpoint::libInit(const EpConfig &prmEpConfig) PJSUA2_THROW(Error)
                                         = &Endpoint::on_call_tsx_terminate_session;
     ua_cfg.cb.on_call_media_state       = &Endpoint::on_call_media_state;
     ua_cfg.cb.on_call_sdp_created       = &Endpoint::on_call_sdp_created;
+    if (prmEpConfig.uaConfig.enableCallSendAckCallback) {
+        ua_cfg.cb.on_call_send_ack      = &Endpoint::on_call_send_ack;
+    }
     ua_cfg.cb.on_stream_precreate       = &Endpoint::on_stream_precreate;
     ua_cfg.cb.on_stream_created2        = &Endpoint::on_stream_created2;
     ua_cfg.cb.on_stream_destroyed       = &Endpoint::on_stream_destroyed;
@@ -2622,6 +2706,19 @@ void Endpoint::natUpdateStunServers(const StringVector &servers,
     PJSUA2_CHECK_EXPR(pjsua_update_stun_servers(count, srv, wait) );
 }
 
+void Endpoint::updateNameservers(const StringVector &servers)
+                                 PJSUA2_THROW(Error)
+{
+    vector<pj_str_t> srv(servers.size());
+    unsigned i;
+
+    for (i=0; i<servers.size(); ++i)
+        srv[i] = str2Pj(servers[i]);
+
+    PJSUA2_CHECK_EXPR(pjsua_update_nameservers((unsigned)srv.size(),
+                                               srv.empty()? NULL : &srv[0]));
+}
+
 void Endpoint::natCheckStunServers(const StringVector &servers,
                                    bool wait,
                                    Token token) PJSUA2_THROW(Error)
@@ -2665,7 +2762,7 @@ TransportId Endpoint::transportCreate(pjsip_transport_type_e type,
 
 IntVector Endpoint::transportEnum() const PJSUA2_THROW(Error)
 {
-    pjsua_transport_id tids[32];
+    pjsua_transport_id tids[PJSUA_MAX_TRANSPORTS];
     unsigned count = PJ_ARRAY_SIZE(tids);
 
     PJSUA2_CHECK_EXPR( pjsua_enum_transports(tids, &count) );
@@ -3105,21 +3202,7 @@ pj_status_t Endpoint::on_auth_create_aka_response_callback(pj_pool_t *pool,
     pj_status_t status = Endpoint::instance().onCredAuth(prm);
 
    if (status == PJ_SUCCESS) {
-        pjsip_digest_credential auth_new = prm.digestCredential.toPj();
-
-        // Duplicate in the pool, so that digestCredential
-        // is allowed to be destructed at the end of the method.
-        pj_strdup(pool, &auth->realm, &auth_new.realm);
-        pj_strdup(pool, &auth->username, &auth_new.username);
-        pj_strdup(pool, &auth->nonce, &auth_new.nonce);
-        pj_strdup(pool, &auth->uri, &auth_new.uri);
-        pj_strdup(pool, &auth->response, &auth_new.response);
-        pj_strdup(pool, &auth->algorithm, &auth_new.algorithm);
-        pj_strdup(pool, &auth->cnonce, &auth_new.cnonce);
-        pj_strdup(pool, &auth->opaque, &auth_new.opaque);
-        pj_strdup(pool, &auth->qop, &auth_new.qop);
-        pj_strdup(pool, &auth->nc, &auth_new.nc);
-        pjsip_param_clone(pool, &auth->other_param, &auth_new.other_param);
+        prm.digestCredential.toPj(pool, *auth);
     }
 #if PJSIP_HAS_DIGEST_AKA_AUTH
     else if (status == PJ_ENOTSUP) {

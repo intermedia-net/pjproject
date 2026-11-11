@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -780,14 +780,21 @@ PJ_DEF(pj_status_t) pjsip_tx_data_clone(const pjsip_tx_data *src,
 
     dst = *p_tdata;
 
-    msg = pjsip_msg_create(dst->pool, PJSIP_RESPONSE_MSG);
+    msg = pjsip_msg_create(dst->pool, src->msg->type);
     dst->msg = msg;
     pjsip_tx_data_add_ref(dst);
 
-    /* Duplicate status line */
-    msg->line.status.code = src->msg->line.status.code;
-    pj_strdup(dst->pool, &msg->line.status.reason,
-              &src->msg->line.status.reason);
+    /* Duplicate request or status line */
+    if (msg->type == PJSIP_REQUEST_MSG) {
+        pjsip_method_copy(dst->pool, &msg->line.req.method,
+                          &src->msg->line.req.method);
+        msg->line.req.uri = (pjsip_uri*)
+                            pjsip_uri_clone(dst->pool, src->msg->line.req.uri);
+    } else {
+        msg->line.status.code = src->msg->line.status.code;
+        pj_strdup(dst->pool, &msg->line.status.reason,
+                  &src->msg->line.status.reason);
+    }
 
     /* Duplicate all headers */
     hsrc = src->msg->hdr.next;
@@ -1366,6 +1373,13 @@ PJ_DEF(pj_status_t) pjsip_transport_register( pjsip_tpmgr *mgr,
     key_len = sizeof(tp->key.type) + tp->addr_len;
     pj_lock_acquire(mgr->lock);
 
+    /* The factory may have been unregistered while creating the transport */
+    if (tp->factory &&
+        pj_list_find_node(&mgr->factory_list, tp->factory) == NULL)
+    {
+        tp->factory = NULL;
+    }
+
     hval = 0;
     tp_ref = (transport *)pj_hash_get(mgr->table, &tp->key, key_len, &hval);
 
@@ -1647,10 +1661,29 @@ PJ_DEF(pj_status_t) pjsip_tpmgr_register_tpfactory( pjsip_tpmgr *mgr,
 PJ_DEF(pj_status_t) pjsip_tpmgr_unregister_tpfactory( pjsip_tpmgr *mgr,
                                                       pjsip_tpfactory *tpf)
 {
+    pj_hash_iterator_t itr_val;
+    pj_hash_iterator_t *itr;
+
     pj_lock_acquire(mgr->lock);
 
     pj_assert(pj_list_find_node(&mgr->factory_list, tpf) == tpf);
     pj_list_erase(tpf);
+
+    /* Transports created by the factory may outlive it */
+    itr = pj_hash_first(mgr->table, &itr_val);
+    while (itr) {
+        transport *tp_entry = (transport *) pj_hash_this(mgr->table, itr);
+        transport *tp_iter = tp_entry;
+
+        if (tp_entry) {
+            do {
+                if (tp_iter->tp->factory == tpf)
+                    tp_iter->tp->factory = NULL;
+                tp_iter = tp_iter->next;
+            } while (tp_iter != tp_entry);
+        }
+        itr = pj_hash_next(mgr->table, itr);
+    }
 
     pj_lock_release(mgr->lock);
 
@@ -2266,6 +2299,7 @@ PJ_DEF(pj_ssize_t) pjsip_tpmgr_receive_packet( pjsip_tpmgr *mgr,
                     }
                     /* Overflow, buffer too small. */
                     dd_status = PJSIP_ERXOVERFLOW;
+                    msg_fragment_size = remaining_len;
                 } else {
                     /* msg_status == PJSIP_EMISSINGHDR ||
                        msg_status == PJSIP_EINVALIDHDR

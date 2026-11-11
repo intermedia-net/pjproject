@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -267,6 +267,7 @@ struct pjmedia_conf
     op_entry             *op_queue;     /**< Queue of operations.           */
     op_entry             *op_queue_free;/**< Queue of free entries.         */
     pjmedia_conf_op_cb    cb;           /**< OP callback.                   */
+    void                 *user_data;    /**< OP callback user data.         */
 };
 
 
@@ -396,6 +397,7 @@ static void handle_op_queue(pjmedia_conf *conf)
 
             pj_log_push_indent();
             info.conf = conf;
+            info.user_data = conf->user_data;
             info.op_type = type;
             info.status = status;
             info.op_param = param;
@@ -793,11 +795,18 @@ PJ_DEF(pj_status_t) pjmedia_conf_create2(pj_pool_t *pool,
                                          const pjmedia_conf_param *param,
                                          pjmedia_conf **p_conf)
 {
-    PJ_ASSERT_RETURN(param, PJ_EINVAL);
-    return pjmedia_conf_create(pool, 
-                               param->max_slots, param->sampling_rate, 
-                               param->channel_count, param->samples_per_frame, 
-                               param->bits_per_sample, param->options, p_conf);
+    pj_status_t status;
+
+    PJ_ASSERT_RETURN(param && p_conf, PJ_EINVAL);
+    status = pjmedia_conf_create(pool, param->max_slots,
+                                 param->sampling_rate, param->channel_count,
+                                 param->samples_per_frame,
+                                 param->bits_per_sample, param->options,
+                                 p_conf);
+    if (status == PJ_SUCCESS)
+        (*p_conf)->user_data = param->user_data;
+
+    return status;
 }
 
 /*
@@ -965,6 +974,7 @@ PJ_DEF(pj_status_t) pjmedia_conf_destroy( pjmedia_conf *conf )
 
                 pj_log_push_indent();
                 op_info.conf = conf;
+                op_info.user_data = conf->user_data;
                 op_info.op_type = PJMEDIA_CONF_OP_REMOVE_PORT;
                 op_info.status = status;
                 op_info.op_param = oprm;
@@ -1919,6 +1929,7 @@ PJ_DEF(pj_status_t) pjmedia_conf_remove_port( pjmedia_conf *conf,
                 if (conf->cb) {
                     pj_log_push_indent();
                     op_info.conf = conf;
+                    op_info.user_data = conf->user_data;
                     op_info.status = PJ_ECANCELLED;
                     (*conf->cb)(&op_info);
                     pj_log_pop_indent();
@@ -2006,6 +2017,7 @@ PJ_DEF(pj_status_t) pjmedia_conf_remove_port( pjmedia_conf *conf,
 
                 pj_log_push_indent();
                 op_info.conf = conf;
+                op_info.user_data = conf->user_data;
                 op_info.op_type = PJMEDIA_CONF_OP_REMOVE_PORT;
                 op_info.status = status;
                 op_info.op_param = prm;
@@ -3119,6 +3131,28 @@ static pj_status_t write_port(pjmedia_conf *conf, struct conf_port *cport,
             return PJ_SUCCESS;
     }
 
+    /* Samples this frame adds after resampling and channel conversion. */
+    if (cport->clock_rate != conf->clock_rate) {
+        dst_count = (unsigned)(conf->samples_per_frame * 1.0 *
+                               cport->clock_rate / conf->clock_rate + 0.5);
+    } else {
+        dst_count = conf->samples_per_frame;
+    }
+    if (conf->channel_count == 1)
+        dst_count *= cport->channel_count;
+    else if (cport->channel_count == 1)
+        dst_count /= conf->channel_count;
+
+    /* The leftover is drained below even when the port fails, so this
+     * should not happen, but never write past the TX buffer.
+     */
+    if (cport->tx_buf_count + dst_count > cport->tx_buf_cap) {
+        PJ_LOG(4,(THIS_FILE, "TX buffer of %.*s overflows, dropping %u "
+                             "samples", (int)cport->name.slen,
+                             cport->name.ptr, cport->tx_buf_count));
+        cport->tx_buf_count = 0;
+    }
+
     /* If it has different clock_rate, must resample. */
     if (cport->clock_rate != conf->clock_rate) {
         pjmedia_resample_run( cport->tx_resample, buf, 
@@ -3186,6 +3220,13 @@ static pj_status_t write_port(pjmedia_conf *conf, struct conf_port *cport,
                                frame.size / BYTES_PER_SAMPLE));
 
             status = pjmedia_port_put_frame(cport->port, &frame);
+            if (status != PJ_SUCCESS) {
+                /* Drop the rest, otherwise the leftover accumulates and
+                 * overruns the TX buffer while the port keeps failing.
+                 */
+                cport->tx_buf_count = 0;
+                break;
+            }
 
         } else
             status = PJ_SUCCESS;

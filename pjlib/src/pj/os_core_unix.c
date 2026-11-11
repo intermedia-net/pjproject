@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -46,6 +46,9 @@
 #include <unistd.h>         // getpid()
 #include <errno.h>          // errno
 #include <time.h>           // clock_gettime()
+#if PJ_HAS_SCHED_YIELD
+#  include <sched.h>        // sched_yield()
+#endif
 
 #if PJ_HAS_THREADS
 #  if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L \
@@ -118,6 +121,9 @@ struct pj_thread_t
     int             caller_line;
 #endif
 };
+
+PJ_STATIC_ASSERT(sizeof(pj_thread_desc) >= sizeof(pj_thread_t),
+                 pj_thread_desc_must_hold_pj_thread_t);
 
 struct pj_atomic_t
 {
@@ -685,12 +691,6 @@ PJ_DEF(pj_status_t) pj_thread_register ( const char *cstr_thread_name,
     pj_thread_t *thread = (pj_thread_t *)desc;
     pj_str_t thread_name = pj_str((char*)cstr_thread_name);
 
-    /* Size sanity check. */
-    if (sizeof(pj_thread_desc) < sizeof(pj_thread_t)) {
-        pj_assert(!"Not enough pj_thread_desc size!");
-        return PJ_EBUG;
-    }
-
     /* Warn if this thread has been registered before */
     if (pj_thread_local_get (thread_tls_id) != 0) {
         // 2006-02-26 bennylp:
@@ -1201,6 +1201,31 @@ PJ_DEF(pj_status_t) pj_thread_sleep(unsigned msec)
 
     pj_set_os_error(0);
 
+    /* A zero duration means "give up the CPU now": without this, the loop
+     * below would do nothing at all, since usleep() is never reached.
+     */
+    if (msec == 0) {
+#if PJ_HAS_SCHED_YIELD
+        /* sched_yield() is specified to return int on all platforms, so
+         * unlike usleep() below its return value can be checked directly.
+         */
+        if (sched_yield() != 0)
+            return PJ_RETURN_OS_ERROR(pj_get_native_os_error());
+#else
+        /* usleep() is declared void on some platforms (see the note after
+         * the sleep loop below), hence the errno-based check, with the same
+         * ETIMEDOUT workaround the loop below needs.
+         */
+        usleep(0);
+        if (pj_get_native_os_error() != 0 &&
+            pj_get_native_os_error() != ETIMEDOUT)
+        {
+            return pj_get_os_error();
+        }
+#endif
+        return PJ_SUCCESS;
+    }
+
     /* Sleep in sub-second chunks to avoid overflow of msec*1000 for large
      * values, and to keep each usleep() argument below 1000000, which POSIX
      * requires.
@@ -1480,6 +1505,12 @@ PJ_DEF(void) pj_atomic_add( pj_atomic_t *atomic_var,
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+#if PJ_HAS_THREADS
+/* The pthread key is handed back to the caller as a long index. */
+PJ_STATIC_ASSERT(sizeof(pthread_key_t) <= sizeof(long),
+                 pthread_key_t_must_fit_in_long);
+#endif
+
 /*
  * pj_thread_local_alloc()
  */
@@ -1491,7 +1522,6 @@ PJ_DEF(pj_status_t) pj_thread_local_alloc(long *p_index)
 
     PJ_ASSERT_RETURN(p_index != NULL, PJ_EINVAL);
 
-    pj_assert( sizeof(pthread_key_t) <= sizeof(long));
     if ((rc=pthread_key_create(&key, NULL)) != 0)
         return PJ_RETURN_OS_ERROR(rc);
 

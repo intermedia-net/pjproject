@@ -9,6 +9,9 @@ cmake_dependent_option(PJSIP_WITH_TLS
   "PJLIB_WITH_SSL" OFF
 )
 
+# Include Digest AKAv1/AKAv2 authentication, using the bundled milenage
+option(PJSIP_WITH_DIGEST_AKA_AUTH "Enable Digest AKA authentication" OFF)
+
 # ##############################################################################
 # pjsip
 
@@ -88,6 +91,18 @@ target_link_libraries(pjsip
     pjlib-util
 )
 
+if(PJSIP_WITH_DIGEST_AKA_AUTH)
+  target_sources(pjsip
+    PRIVATE
+      ../third_party/milenage/milenage.c
+      ../third_party/milenage/rijndael.c
+  )
+endif()
+target_compile_definitions(pjsip
+  PUBLIC
+    PJSIP_HAS_DIGEST_AKA_AUTH=$<BOOL:${PJSIP_WITH_DIGEST_AKA_AUTH}>
+)
+
 # configuration
 block(SCOPE_FOR VARIABLES)
   # G711 codec
@@ -107,6 +122,16 @@ target_sources(pjsip
     BASE_DIRS "${CMAKE_CURRENT_BINARY_DIR}/include"
     FILES
       "${CMAKE_CURRENT_BINARY_DIR}/include/pjsip/sip_autoconf.h"
+)
+
+# A file set's BASE_DIRS land after whatever include directories the target
+# already had, so the source tree would be searched first and an autotools
+# build's leftover pjsip/sip_autoconf.h would shadow the one just generated.
+# ./configure-android is the established Android workflow, so that leftover is
+# the normal state of a working tree. BEFORE puts the build directory first.
+target_include_directories(pjsip BEFORE
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
 )
 
 # ##############################################################################
@@ -239,6 +264,7 @@ target_link_libraries(pjsua-lib
 # ##############################################################################
 # pjsua2
 
+if(PJ_WITH_CXX)
 add_library(pjsua2
   src/pjsua2/account.cpp
   src/pjsua2/endpoint.cpp
@@ -289,6 +315,7 @@ target_link_libraries(pjsua2
     pjsip-ua
     pjsua-lib
 )
+endif() # PJ_WITH_CXX
 
 # ##############################################################################
 # Test application
@@ -320,6 +347,9 @@ if(BUILD_TESTING)
     src/test/pjsua_auth_test.c
     src/test/pjsua_call_test.c
     src/test/pjsua_acc_test.c
+    src/test/pjsua_pres_test.c
+    src/test/pjsua_dns_test.c
+    src/test/srv_failover_test.c
     src/test/${PJ_TEST_MAIN}
   )
 
@@ -357,11 +387,15 @@ if(BUILD_TESTING)
       pjsua-lib
   )
 
-  # pjsua test application
+  # pjsua2 test application
+  if(PJ_WITH_CXX)
   add_executable(pjsua2-test
     src/pjsua2-test/main.cpp
     src/pjsua2-test/instant_messaging.cpp
     src/pjsua2-test/auth_challenge.cpp
+    src/pjsua2-test/audio_media_port.cpp
+    src/pjsua2-test/call_replace.cpp
+    src/pjsua2-test/object_lifetime.cpp
   )
 
   target_link_libraries(pjsua2-test
@@ -380,4 +414,5 @@ if(BUILD_TESTING)
   )
 
   add_test(NAME pjsua2-test COMMAND pjsua2-test)
+  endif() # PJ_WITH_CXX
 endif()

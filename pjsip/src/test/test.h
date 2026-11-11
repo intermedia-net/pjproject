@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -95,8 +95,9 @@ extern pj_caching_pool caching_pool;
 #define INCLUDE_TSX_BENCH       (INCLUDE_MESSAGING_GROUP && WITH_BENCHMARK)
 #define INCLUDE_UDP_TEST        INCLUDE_TRANSPORT_GROUP
 #define INCLUDE_LOOP_TEST       INCLUDE_TRANSPORT_GROUP
-#define INCLUDE_TCP_TEST        INCLUDE_TRANSPORT_GROUP
+#define INCLUDE_TCP_TEST        (INCLUDE_TRANSPORT_GROUP && PJ_HAS_TCP)
 #define INCLUDE_RESOLVE_TEST    INCLUDE_TRANSPORT_GROUP
+#define INCLUDE_SRV_FAILOVER_TEST INCLUDE_TRANSPORT_GROUP
 #define INCLUDE_TSX_TEST        INCLUDE_TSX_GROUP
 #define INCLUDE_TSX_DESTROY_TEST INCLUDE_TSX_GROUP
 #define INCLUDE_INV_OA_TEST     INCLUDE_INV_GROUP
@@ -106,6 +107,8 @@ extern pj_caching_pool caching_pool;
 #define INCLUDE_PJSUA_AUTH_TEST INCLUDE_REGC_GROUP
 #define INCLUDE_PJSUA_CALL_TEST INCLUDE_REGC_GROUP
 #define INCLUDE_PJSUA_ACC_TEST  INCLUDE_REGC_GROUP
+#define INCLUDE_PJSUA_PRES_TEST INCLUDE_REGC_GROUP
+#define INCLUDE_PJSUA_DNS_TEST  INCLUDE_TRANSPORT_GROUP
 #define INCLUDE_DLG_CORE_TEST   INCLUDE_MESSAGING_GROUP
 
 
@@ -125,13 +128,19 @@ int transport_tcp_test(void);
 int transport_tcp_keep_alive_test(void);
 int transport_rx_overflow_test(void);
 int resolve_test(void);
+int srv_failover_test(void);
 int regc_test(void);
 int auth_async_test(void);
 int pjsua_auth_test(void);
 int pjsua_call_test(void);
+int pjsua_late_sdp_offer_test(void);
 int pjsua_acc_test(void);
+int pjsua_pres_test(void);
+int srv_failover_pjsua_test(void);
+int pjsua_dns_test(void);
 int inv_offer_answer_test(void);
 int dlg_core_test(void);
+int dlg_ack_resolve_test(void);
 int dlg_target_refresh_test(void);
 
 #define MAX_TSX_TESTS   10
@@ -145,6 +154,7 @@ struct tsx_test_param
 extern struct tsx_test_param tsx_test[MAX_TSX_TESTS];
 
 int tsx_basic_test(unsigned tid);
+int tsx_send_cb_terminate_test(unsigned tid);
 int tsx_uac_test(unsigned tid);
 int tsx_uas_test(unsigned tid);
 
@@ -169,6 +179,7 @@ void app_perror(const char *msg, pj_status_t status);
 int  init_msg_logger(void);
 int  msg_logger_set_enabled(pj_bool_t enabled);
 void flush_events(unsigned duration);
+void restore_test_endpt(void);
 pjsip_transport *wait_loop_transport_clear(int secs);
 
 void report_ival(const char *name, int value, const char *valname, const char *desc);
@@ -189,7 +200,7 @@ PJ_INLINE(pj_bool_t) is_user_equal(const pjsip_fromto_hdr *hdr, const char *user
 /* Settings. */
 extern int log_level;
 
-#define UT_MAX_TESTS    32
+#define UT_MAX_TESTS    40
 #include "../../../pjlib/src/pjlib-test/test_util.h"
 
 struct test_app_t

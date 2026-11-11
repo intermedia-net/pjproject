@@ -22,8 +22,18 @@ project(pjproject
   VERSION ${_pj_cmake_version}
   DESCRIPTION "Multimedia communication library"
   HOMEPAGE_URL "http://www.pjsip.org"
-  LANGUAGES C CXX
+  LANGUAGES C
 )
+
+# C++ is needed only by pjsua2 and a few backends (WebRTC AEC3, libyuv, Lyra,
+# OpenH264, Oboe, WASAPI, DirectShow, Android MediaCodec), by pjlib's
+# atomic_queue.cpp, which only those backends use, and by WebRTC's CPU
+# detection on x86. Off, the build is pure C, which is what an embedded
+# toolchain without a C++ runtime needs.
+option(PJ_WITH_CXX "Build the C++ components (pjsua2 and C++ backends)" ON)
+if(PJ_WITH_CXX)
+  enable_language(CXX)
+endif()
 
 # project modules
 list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -35,9 +45,14 @@ if (NOT PJ_SKIP_EXPERIMENTAL_NOTICE)
     " ****************************************************\n"
     " * Building `pjproject` with CMake is experimental  *\n"
     " *--------------------------------------------------*\n"
-    " * Tested platforms:                                *\n"
+    " * Tested in CI:                                    *\n"
     " * - Linux x86_64                                   *\n"
     " * - macOS                                          *\n"
+    " * - Android (arm64-v8a, armeabi-v7a, x86_64, x86)  *\n"
+    " * - Windows x64 (Visual Studio 2022)               *\n"
+    " * Verified manually:                               *\n"
+    " * - iOS (device, simulator)                        *\n"
+    " * - Windows x64 (MinGW-w64)                        *\n"
     " ****************************************************\n"
     "Set `PJ_SKIP_EXPERIMENTAL_NOTICE=ON` to disable this warning"
   )
@@ -81,6 +96,10 @@ endif()
 # ##############################################################################
 # Sub-directories
 
+# For pj_pc_remember_imported_targets(), which the sub-directories that find
+# dependencies call for the pkg-config file
+include(Pj/PkgConfig)
+
 # base library
 add_subdirectory(pjlib)
 
@@ -96,7 +115,10 @@ add_subdirectory(pjsip)
 # run one, and CMake would make each a bundle needing a destination and a
 # signing identity, so the iOS build stops at the libraries -- which is what
 # an iOS consumer links into an app of their own anyway.
-if(NOT IOS)
+# Nor does firmware for a target CMake calls Generic, with no OS or with an
+# RTOS such as Zephyr, so the applications can be left out there.
+option(PJ_BUILD_APPS "Build pjsua and the sample applications" ON)
+if(PJ_BUILD_APPS AND NOT IOS)
   add_subdirectory(pjsip-apps)
 endif()
 
@@ -284,12 +306,14 @@ set(install_targets
   pjsip-simple
   pjsip-ua
   pjsua-lib
-  pjsua2
 )
 
-if(NOT IOS)
-  list(APPEND install_targets pjsua)
-endif()
+# optional targets: pjsua2 needs PJ_WITH_CXX, pjsua PJ_BUILD_APPS and not iOS
+foreach(target pjsua2 pjsua)
+  if(TARGET ${target})
+    list(APPEND install_targets ${target})
+  endif()
+endforeach()
 
 # set `VERSION` and `SO_VERSION`
 foreach(target IN LISTS install_targets)
@@ -318,7 +342,7 @@ install(
     COMPONENT PjRuntime
     NAMELINK_COMPONENT PjDevelopment
   ARCHIVE
-    DESTINATION  "${CMAKE_INSTALL_BINDIR}"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     COMPONENT PjDevelopment
 )
 
@@ -341,18 +365,13 @@ install(
   COMPONENT   PjDevelopment
 )
 
-# APPLE and IOS are empty rather than 0 off those platforms, and
-# PjConfig.cmake.in substitutes them into if() conditions, where an empty
-# operand beside AND is a hard error.
+# APPLE is empty rather than 0 off Apple platforms, and PjConfig.cmake.in
+# substitutes it into an if() condition, where an empty operand beside AND is
+# a hard error.
 if(APPLE)
   set(PJ_APPLE 1)
 else()
   set(PJ_APPLE 0)
-endif()
-if(IOS)
-  set(PJ_IOS 1)
-else()
-  set(PJ_IOS 0)
 endif()
 
 # write package config
@@ -379,16 +398,19 @@ if(NOT (APPLE OR MINGW OR CYGWIN))
   list(APPEND _pj_all_deps WebRTC WebRTC_AEC3)
 endif()
 
+# Go by the target rather than the PJ_DEP_<X> cache entry, which outlives a
+# dependency that a later configure (PJ_WITH_CXX=OFF, provider none) left out.
 foreach(_dep IN LISTS _pj_all_deps)
-  string(TOUPPER "PJ_DEP_${_dep}" _dep_option)
-  if(DEFINED ${_dep_option})
-    if(${_dep_option} STREQUAL "bundled")
+  if(TARGET Pj::Dep::${_dep})
+    get_target_property(_dep_provider Pj::Dep::${_dep} PJ_DEP_PROVIDER)
+    if(_dep_provider STREQUAL "bundled")
       list(APPEND PJ_BUNDLED_DEPS "${_dep}")
-    elseif(${_dep_option} STREQUAL "system")
+    elseif(_dep_provider STREQUAL "system")
       list(APPEND PJ_SYSTEM_DEPS "${_dep}")
     endif()
   endif()
 endforeach()
+unset(_dep_provider)
 unset(_pj_all_deps)
 
 list(JOIN PJ_BUNDLED_DEPS ";" PJ_BUNDLED_DEPS_STR)
@@ -433,8 +455,13 @@ endforeach()
 _pj_collect_find_module(PJLIB_WITH_LIBUUID               UUID)
 _pj_collect_find_module(PJNATH_WITH_UPNP                 UPNP)
 _pj_collect_find_module(PJMEDIA_WITH_AUDIODEV_COREAUDIO   CoreAudio)
+_pj_collect_find_module(PJMEDIA_WITH_AUDIODEV_OBOE        Oboe)
+_pj_collect_find_module(PJMEDIA_WITH_AUDIODEV_WASAPI      WASAPI)
 _pj_collect_find_module(PJMEDIA_WITH_VIDEODEV_V4L2        V4L2)
-if(IOS)
+# PJ_OPENGL_PACKAGE is the name PjConfig.cmake.in calls find_dependency with,
+# so keying off it keeps the two from drifting apart. Only the OpenGLES module
+# is ours; FindOpenGL is a built-in and needs no installing.
+if(PJ_OPENGL_PACKAGE STREQUAL "OpenGLES")
   _pj_collect_find_module(PJMEDIA_WITH_VIDEODEV_OPENGL    OpenGLES)
 endif()
 _pj_collect_find_module(PJMEDIA_WITH_VIDEODEV_DARWIN      AVFoundation)
@@ -445,7 +472,7 @@ _pj_collect_find_module(PJMEDIA_WITH_ILBC_CODEC           AudioToolbox)
 if(PJMEDIA_WITH_RESAMPLE STREQUAL "libsamplerate")
   _pj_collect_find_module(TRUE SampleRate)
 endif()
-_pj_collect_find_module(PJMEDIA_WITH_SPEEX_AEC            SpeexDSP)
+_pj_collect_find_module(PJMEDIA_NEEDS_SPEEXDSP            SpeexDSP)
 _pj_collect_find_module(PJMEDIA_WITH_FFMPEG               FFMPEG)
 _pj_collect_find_module(PJMEDIA_WITH_OPENCORE_AMRNB_CODEC OpenCoreAMRNB)
 _pj_collect_find_module(PJMEDIA_WITH_OPENCORE_AMRWB_CODEC OpenCoreAMRWB)
@@ -456,6 +483,7 @@ _pj_collect_find_module(PJMEDIA_WITH_BCG729_CODEC         BCG729)
 _pj_collect_find_module(PJMEDIA_WITH_LYRA_CODEC           Lyra)
 _pj_collect_find_module(PJMEDIA_WITH_VPX_CODEC            VPX)
 _pj_collect_find_module(PJMEDIA_WITH_OPEN_H264_CODEC      OpenH264)
+_pj_collect_find_module(PJMEDIA_WITH_ANDROID_MEDIACODEC_CODEC MediaNDK)
 
 if(_pj_find_modules)
   list(REMOVE_DUPLICATES _pj_find_modules)
@@ -477,19 +505,18 @@ install(FILES
 # ##############################################################################
 # pkg-config file
 
-set(PREFIX "${CMAKE_INSTALL_PREFIX}") # this should be done at install time
-set(LIBDIR "${PREFIX}/${CMAKE_INSTALL_LIBDIR}")
-set(INCLUDEDIR "${PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}")
-set(PJ_VERSION "${PROJECT_VERSION}")
-set(PJ_INSTALL_LDFLAGS "")
-set(PJ_INSTALL_LDFLAGS "")
-
-configure_file(
+# The libraries in link order; pjsua2 needs PJ_WITH_CXX
+set(_pj_pc_libs
+  pjsua-lib pjsip-ua pjsip-simple pjsip
+  pjmedia-codec pjmedia-videodev pjmedia-audiodev pjmedia
+  pjnath pjlib-util pjlib
+)
+if(TARGET pjsua2)
+  list(PREPEND _pj_pc_libs pjsua2)
+endif()
+pj_generate_pkgconfig(
   "${CMAKE_CURRENT_SOURCE_DIR}/libpjproject.pc.in"
-  "${CMAKE_CURRENT_BINARY_DIR}/libpjproject.pc"
+  "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
+  ${_pj_pc_libs}
 )
-
-install(
-  FILES "${CMAKE_CURRENT_BINARY_DIR}/libpjproject.pc"
-  DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
-)
+unset(_pj_pc_libs)

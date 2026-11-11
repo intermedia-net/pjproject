@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2025-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -46,9 +46,11 @@ void ReceiverAccount::onInstantMessage(OnInstantMessageParam &prm)
     std::cout << "*** Message content: " << prm.msgBody << "\n";
 
     deferredResponse = DeferredResponse(prm);
+    lastTsx = pjsip_rdata_get_tsx(static_cast<pjsip_rx_data*>(prm.rdata.pjRxData));
 
     InstantMessagingTests::testState.messageReceived = true;
     InstantMessagingTests::testState.receivedMessage = prm.msgBody;
+    InstantMessagingTests::testState.receivedContentType = prm.contentType;
 
     std::cout << "*** ReceiverAccount: Message deferred, will respond later\n";
 }
@@ -67,6 +69,7 @@ void ReceiverAccount::sendDeferredResponse(int statusCode, const std::string& re
         std::cout << "*** ReceiverAccount: Deferred response sent - "
                   << statusCode << " " << reason << "\n";
     } catch (Error& err) {
+        InstantMessagingTests::testState.responseError = err.status;
         std::cout << "*** ReceiverAccount: Error sending deferred response: "
                   << err.info() << "\n";
     }
@@ -230,4 +233,109 @@ void InstantMessagingTests::deferredResponse()
     std::cout << "✓ Deferred response successfully sent and received\n";
     std::cout << "✓ Response code: " << testState.responseStatusCode << "\n";
     std::cout << "✓ Response reason: " << testState.responseReason << "\n";
+}
+
+void InstantMessagingTests::longContentType()
+{
+    testState = TestState{};
+
+    AccountConfig receiverCfg;
+    receiverCfg.idUri = "sip:receiver@localhost:5060";
+    receiverCfg.sipConfig.autoRespondSipMessage = PJ_TRUE;
+
+    receiverAcc = std::unique_ptr<ReceiverAccount>(new ReceiverAccount());
+    receiverAcc->create(receiverCfg);
+
+    AccountConfig senderCfg;
+    senderCfg.idUri = "sip:sender@localhost:5060";
+    senderCfg.sipConfig.autoRespondSipMessage = PJ_TRUE;
+
+    senderAcc = std::unique_ptr<SenderAccount>(new SenderAccount());
+    senderAcc->create(senderCfg);
+
+    std::cout << "\n=== TEST: SIP MESSAGE with long Content-Type ===\n";
+
+    BuddyConfig buddyCfg;
+    buddyCfg.uri = "sip:receiver@localhost:5060";
+    buddyCfg.subscribe = false;
+    buddyCfg.subscribe_dlg_event = false;
+
+    senderBuddy = std::unique_ptr<Buddy>(new Buddy());
+    senderBuddy->create(*senderAcc, buddyCfg);
+
+    const std::string testMessage = "Hello world!";
+    const std::string contentType = "text/" + std::string(300, 'x');
+
+    SendInstantMessageParam msgParam;
+    msgParam.content = testMessage;
+    msgParam.contentType = contentType;
+
+    senderBuddy->sendInstantMessage(msgParam);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    assert(testState.messageReceived == true);
+    assert(testState.receivedMessage == testMessage);
+    assert(testState.receivedContentType == contentType);
+
+    std::cout << "✓ Long content type successfully received\n";
+}
+
+void InstantMessagingTests::deferredResponseAfterTsxEnded()
+{
+    testState = TestState{};
+
+    AccountConfig receiverCfg;
+    receiverCfg.idUri = "sip:receiver@localhost:5060";
+    receiverCfg.sipConfig.autoRespondSipMessage = PJ_FALSE;
+
+    receiverAcc = std::unique_ptr<ReceiverAccount>(new ReceiverAccount());
+    receiverAcc->create(receiverCfg);
+
+    AccountConfig senderCfg;
+    senderCfg.idUri = "sip:sender@localhost:5060";
+    senderCfg.sipConfig.autoRespondSipMessage = PJ_TRUE;
+
+    senderAcc = std::unique_ptr<SenderAccount>(new SenderAccount());
+    senderAcc->create(senderCfg);
+
+    std::cout << "\n=== TEST: Deferred response after the transaction ended ===\n";
+
+    BuddyConfig buddyCfg;
+    buddyCfg.uri = "sip:receiver@localhost:5060";
+    buddyCfg.subscribe = false;
+    buddyCfg.subscribe_dlg_event = false;
+
+    senderBuddy = std::unique_ptr<Buddy>(new Buddy());
+    senderBuddy->create(*senderAcc, buddyCfg);
+
+    SendInstantMessageParam msgParam;
+    msgParam.content = "Hello world!";
+    msgParam.contentType = "text/plain";
+
+    /* No retransmission, which would create a new transaction */
+    const unsigned t1 = pjsip_cfg()->tsx.t1;
+    pjsip_tsx_set_timers(30000, 0, 0, 0);
+    senderBuddy->sendInstantMessage(msgParam);
+    pjsip_tsx_set_timers(t1, 0, 0, 0);
+
+    for (int i = 0; i < 50 && !testState.messageReceived; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    assert(testState.messageReceived == true);
+    assert(receiverAcc->lastTsx != nullptr);
+
+    const unsigned tsxCnt = pjsip_tsx_layer_get_tsx_count();
+    pjsip_tsx_terminate(receiverAcc->lastTsx, PJSIP_SC_TSX_TRANSPORT_ERROR);
+
+    for (int i = 0; i < 50 && pjsip_tsx_layer_get_tsx_count() >= tsxCnt; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    assert(pjsip_tsx_layer_get_tsx_count() < tsxCnt);
+
+    receiverAcc->sendDeferredResponse(200, "OK");
+
+    assert(testState.responseSent == false);
+    assert(testState.responseError == PJ_ENOTFOUND);
+
+    std::cout << "✓ Deferred response rejected after the transaction ended\n";
 }

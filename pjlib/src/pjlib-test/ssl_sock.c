@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -22,6 +22,11 @@
  * For OpenSSL backend only and TEST_LOAD_FROM_FILES must be 1.
  */
 #define TEST_LOAD_DIRECT            1
+
+#define TEST_CERT_BUFFER            \
+    (PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_OPENSSL || \
+     PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_GNUTLS || \
+     PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_MBEDTLS)
 
 
 #if INCLUDE_SSLSOCK_TEST
@@ -66,7 +71,9 @@ struct test_state
     pj_pool_t      *pool;           /* pool                                 */
     pj_ioqueue_t   *ioqueue;        /* ioqueue                              */
     pj_ssl_sock_t  *accepted_ssock; /* accepted server-side socket          */
+    struct test_state *accepted_st; /* state of the accepted socket         */
     pj_bool_t       is_server;      /* server role flag                     */
+    const char     *cert_der;       /* DER of this end's own certificate    */
     pj_bool_t       is_verbose;     /* verbose flag, e.g: cert info         */
     pj_bool_t       echo;           /* echo received data                   */
     pj_status_t     err;            /* error flag                           */
@@ -117,6 +124,63 @@ static void dump_ssl_info(const pj_ssl_sock_info *si)
     }
 }
 
+/* The local raw chain must hold the local certificate, in storage of its
+ * own rather than the peer chain's. der_name is the DER of the certificate
+ * this end presents, or NULL to compare the storage only. Backends that
+ * don't report the local raw chain, e.g. OpenSSL, leave cnt zero and are
+ * skipped.
+ */
+static pj_status_t check_raw_chain(const pj_ssl_sock_info *si,
+                                   pj_pool_t *pool,
+                                   const char *der_name)
+{
+    const pj_ssl_cert_info *lci = si->local_cert_info;
+    const pj_ssl_cert_info *rci = si->remote_cert_info;
+    pj_str_t der_file;
+    pj_oshandle_t fd = NULL;
+    pj_ssize_t size;
+    pj_str_t der;
+    pj_status_t status;
+
+    if (!lci || lci->raw_chain.cnt == 0)
+        return PJ_SUCCESS;
+
+    if (rci && rci->raw_chain.cnt &&
+        lci->raw_chain.cert_raw == rci->raw_chain.cert_raw)
+    {
+        return PJ_EBUG;
+    }
+
+    if (!der_name)
+        return PJ_SUCCESS;
+
+    der_file = pj_str((char*)der_name);
+    size = (pj_ssize_t)pj_file_size(der_file.ptr);
+    if (size <= 0)
+        return PJ_ENOTFOUND;
+
+    status = pj_file_open(pool, der_file.ptr, PJ_O_RDONLY, &fd);
+    if (status != PJ_SUCCESS)
+        return status;
+
+    der.ptr = (char*)pj_pool_alloc(pool, size);
+    status = pj_file_read(fd, der.ptr, &size);
+    der.slen = size;
+    pj_file_close(fd);
+    if (status != PJ_SUCCESS)
+        return status;
+    if (der.slen <= 0)
+        return PJ_EEOF;
+
+    if (lci->raw_chain.cert_raw[0].slen != der.slen ||
+        pj_memcmp(lci->raw_chain.cert_raw[0].ptr, der.ptr, der.slen))
+    {
+        return PJ_EBUG;
+    }
+
+    return PJ_SUCCESS;
+}
+
 
 static pj_bool_t ssl_on_connect_complete(pj_ssl_sock_t *ssock,
                                          pj_status_t status)
@@ -135,6 +199,12 @@ static pj_bool_t ssl_on_connect_complete(pj_ssl_sock_t *ssock,
     status = pj_ssl_sock_get_info(ssock, &info);
     if (status != PJ_SUCCESS) {
         app_perror("...ERROR pj_ssl_sock_get_info()", status);
+        goto on_return;
+    }
+
+    status = check_raw_chain(&info, st->pool, st->cert_der);
+    if (status != PJ_SUCCESS) {
+        app_perror("...ERROR invalid local raw chain", status);
         goto on_return;
     }
 
@@ -218,11 +288,22 @@ static pj_bool_t ssl_on_accept_complete(pj_ssl_sock_t *ssock,
 
     /* Track accepted socket for cleanup */
     parent_st->accepted_ssock = newsock;
+    parent_st->accepted_st = st;
 
     status = pj_ssl_sock_get_info(newsock, &info);
     if (status != PJ_SUCCESS) {
         app_perror("...ERROR pj_ssl_sock_get_info()", status);
         goto on_return;
+    }
+
+    status = check_raw_chain(&info, st->pool, st->cert_der);
+    if (status != PJ_SUCCESS) {
+        app_perror("...ERROR invalid local raw chain", status);
+        /* Report through the parent and keep echoing: closing from this
+         * callback leaves on_handshake_complete() using a released
+         * ssock->parent, and perf_test() waits for every client to finish.
+         */
+        parent_st->err = status;
     }
 
     pj_sockaddr_print(src_addr, buf, sizeof(buf), 1);
@@ -511,13 +592,19 @@ on_return:
     return status;
 }
 
-#if !(defined(TEST_LOAD_FROM_FILES) && TEST_LOAD_FROM_FILES==1) 
+#if !(defined(TEST_LOAD_FROM_FILES) && TEST_LOAD_FROM_FILES==1) || \
+    TEST_CERT_BUFFER
 static pj_status_t load_cert_to_buf(pj_pool_t *pool, const pj_str_t *file_name,
                                     pj_ssl_cert_buffer *buf)
 {
     pj_status_t status;
     pj_oshandle_t fd = 0;
     pj_ssize_t size = (pj_ssize_t)pj_file_size(file_name->ptr);
+
+    if (size < 0) {
+        status = pj_get_os_error();
+        return status ? status : PJ_ENOTFOUND;
+    }
 
     status = pj_file_open(pool, file_name->ptr, PJ_O_RDONLY, &fd);
     if (status != PJ_SUCCESS)
@@ -676,9 +763,16 @@ on_error:
 #   define load_cert_direct(pool,p_cert)
 #endif
 
-static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
-                     pj_ssl_cipher srv_cipher, pj_ssl_cipher cli_cipher,
-                     pj_bool_t req_client_cert, pj_bool_t client_provide_cert)
+/* Supplied credentials are borrowed; NULL selects the default fixtures. */
+static int echo_test_with_certs(pj_ssl_sock_proto srv_proto,
+                               pj_ssl_sock_proto cli_proto,
+                               pj_ssl_cipher srv_cipher,
+                               pj_ssl_cipher cli_cipher,
+                               pj_bool_t req_client_cert,
+                               pj_bool_t client_provide_cert,
+                               pj_bool_t verify_peer,
+                               const pj_ssl_cert_t *server_cert,
+                               const pj_ssl_cert_t *client_cert)
 {
     pj_pool_t *pool = NULL;
     pj_ioqueue_t *ioqueue = NULL;
@@ -691,7 +785,12 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
     pj_sockaddr addr, listen_addr;
     pj_ssl_cipher ciphers[1];
     pj_ssl_cert_t *cert = NULL;
+    pj_ssl_cert_t *cli_cert = NULL;
     pj_status_t status;
+
+#if (PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_SCHANNEL)
+    PJ_UNUSED_ARG(server_cert);
+#endif
 
     pool = pj_pool_create(mem, "ssl_echo", 256, 256, NULL);
 
@@ -713,6 +812,7 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
     param.ioqueue = ioqueue;
     param.timer_heap = timer;
     param.ciphers = ciphers;
+    param.verify_peer = verify_peer;
 
     /* Init default bind address */
     {
@@ -731,6 +831,7 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
     state_serv.echo = PJ_TRUE;
     state_serv.is_server = PJ_TRUE;
     state_serv.is_verbose = PJ_TRUE;
+    state_serv.cert_der = CERT_DER_FILE;
 
     status = pj_ssl_sock_create(pool, &param, &ssock_serv);
     if (status != PJ_SUCCESS) {
@@ -751,6 +852,11 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
         }
     }
 #else
+    if (server_cert) {
+        status = pj_ssl_sock_set_certificate(ssock_serv, pool, server_cert);
+        if (status != PJ_SUCCESS)
+            goto on_return;
+    } else
     {
         pj_str_t ca_file = pj_str(CERT_CA_FILE);
         pj_str_t cert_file = pj_str(CERT_FILE);
@@ -834,6 +940,7 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
     state_cli.pool = pool;
     state_cli.check_echo = PJ_TRUE;
     state_cli.is_verbose = PJ_TRUE;
+    state_cli.cert_der = CERT_DER_FILE;
 
     {
         /* srand() should be done centrally (blp)
@@ -851,6 +958,9 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
             state_cli.send_str[i] = (char)(pj_rand() % 256);
     }
 
+    /* Verifying the server, below, needs the name its certificate is for */
+    param.server_name = pj_str("127.0.0.1");
+
     status = pj_ssl_sock_create(pool, &param, &ssock_cli);
     if (status != PJ_SUCCESS) {
         goto on_return;
@@ -860,6 +970,12 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
      * Reusing certificate for server above, but if client_provide_cert
      * is not set, override the certificate with CA certificate.
      */
+    if (client_cert) {
+        status = pj_ssl_sock_set_certificate(ssock_cli, pool, client_cert);
+        if (status != PJ_SUCCESS)
+            goto on_return;
+        state_cli.cert_der = CERT_CLI_DER_FILE;
+    } else
 #if (PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_SCHANNEL)
     if (client_provide_cert) {
         status = load_cert_from_store(pool, &cert);
@@ -872,6 +988,8 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
     }
 #else
     {
+        cli_cert = cert;
+
         if (!client_provide_cert) {
             pj_str_t ca_file = pj_str(CERT_CA_FILE);
             pj_str_t null_str = pj_str("");
@@ -880,11 +998,12 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
 #if (defined(TEST_LOAD_FROM_FILES) && TEST_LOAD_FROM_FILES==1)
             /* Reset any certificate & private keys previously set */
             status = pj_ssl_cert_load_from_files(pool, &ca_file, &null_str, 
-                                                 &null_str, &null_str, &cert);
+                                                 &null_str, &null_str,
+                                                 &cli_cert);
 
             /* Also reset any direct backend objects */
             pj_bzero(&cert_direct, sizeof(cert_direct));
-            pj_ssl_cert_load_direct(pool, &cert_direct, &cert);
+            pj_ssl_cert_load_direct(pool, &cert_direct, &cli_cert);
 #else
             pj_ssl_cert_buffer null_buf, ca_buf;
 
@@ -896,15 +1015,53 @@ static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
             }
 
             status = pj_ssl_cert_load_from_buffer(pool, &ca_buf, &null_buf,
-                                                  &null_buf, &null_str, &cert);
+                                                  &null_buf, &null_str,
+                                                  &cli_cert);
 #endif
             if (status != PJ_SUCCESS) {
                 goto on_return;
             }
 
         }
+#if TEST_CLI_OWN_CERT
+        else {
+            /* A credential of its own, so each end's local certificate
+             * chain differs from the peer's in content as well as storage.
+             */
+            pj_str_t ca_file = pj_str(CERT_CA_FILE);
+            pj_str_t cert_file = pj_str(CERT_CLI_FILE);
+            pj_str_t privkey_file = pj_str(CERT_CLI_PRIVKEY_FILE);
+            pj_str_t privkey_pass = pj_str(CERT_PRIVKEY_PASS);
+            pj_ssl_cert_t *own_cert = NULL;
 
-        status = pj_ssl_sock_set_certificate(ssock_cli, pool, cert);
+#if (defined(TEST_LOAD_FROM_FILES) && TEST_LOAD_FROM_FILES==1)
+            status = pj_ssl_cert_load_from_files(pool, &ca_file, &cert_file,
+                                                 &privkey_file, &privkey_pass,
+                                                 &own_cert);
+#else
+            pj_ssl_cert_buffer ca_buf, cert_buf, privkey_buf;
+
+            status = load_cert_to_buf(pool, &ca_file, &ca_buf);
+            if (status == PJ_SUCCESS)
+                status = load_cert_to_buf(pool, &cert_file, &cert_buf);
+            if (status == PJ_SUCCESS)
+                status = load_cert_to_buf(pool, &privkey_file, &privkey_buf);
+            if (status == PJ_SUCCESS) {
+                status = pj_ssl_cert_load_from_buffer(pool, &ca_buf, &cert_buf,
+                                                      &privkey_buf,
+                                                      &privkey_pass, &own_cert);
+            }
+#endif
+            if (status != PJ_SUCCESS) {
+                goto on_return;
+            }
+
+            cli_cert = own_cert;
+            state_cli.cert_der = CERT_CLI_DER_FILE;
+        }
+#endif
+
+        status = pj_ssl_sock_set_certificate(ssock_cli, pool, cli_cert);
         if (status != PJ_SUCCESS) {
             goto on_return;
         }
@@ -975,6 +1132,11 @@ on_return:
 
     if (ssock_serv)
         pj_ssl_sock_close(ssock_serv);
+    if (state_serv.accepted_st && !state_serv.accepted_st->err &&
+        !state_serv.accepted_st->done)
+    {
+        pj_ssl_sock_close(state_serv.accepted_ssock);
+    }
     if (ssock_cli && !state_cli.err && !state_cli.done) 
         pj_ssl_sock_close(ssock_cli);
     if (ioqueue)
@@ -986,6 +1148,72 @@ on_return:
 
     return status;
 }
+
+
+static int echo_test(pj_ssl_sock_proto srv_proto, pj_ssl_sock_proto cli_proto,
+                     pj_ssl_cipher srv_cipher, pj_ssl_cipher cli_cipher,
+                     pj_bool_t req_client_cert, pj_bool_t client_provide_cert)
+{
+    return echo_test_with_certs(srv_proto, cli_proto, srv_cipher, cli_cipher,
+                               req_client_cert, client_provide_cert,
+                               PJ_FALSE, NULL, NULL);
+}
+
+
+#if TEST_CERT_BUFFER
+static int cert_buffer_test(void)
+{
+    const char *files[] = { CERT_CA_FILE, CERT_FILE, CERT_PRIVKEY_FILE,
+                           CERT_CLI_FILE, CERT_CLI_PRIVKEY_FILE };
+    pj_pool_t *pool;
+    pj_ssl_cert_buffer buf[PJ_ARRAY_SIZE(files)];
+    pj_str_t pass = pj_str(CERT_PRIVKEY_PASS);
+    pj_status_t status = PJ_SUCCESS;
+    unsigned i, j;
+
+    pool = pj_pool_create(mem, "ssl_cert_buf", 4096, 4096, NULL);
+    for (j = 0; j < PJ_ARRAY_SIZE(files); ++j) {
+        pj_str_t file = pj_str((char *)files[j]);
+
+        status = load_cert_to_buf(pool, &file, &buf[j]);
+        if (status != PJ_SUCCESS)
+            goto on_return;
+    }
+
+    for (i = 0; i < 2; ++i) {
+        pj_ssl_cert_t *server_cert = NULL;
+        pj_ssl_cert_t *client_cert = NULL;
+
+        PJ_LOG(3, ("", "..PEM certificate buffers %s NUL",
+                   i ? "including" : "excluding"));
+        if (i) {
+            for (j = 0; j < PJ_ARRAY_SIZE(buf); ++j)
+                ++buf[j].slen;
+        }
+
+        status = pj_ssl_cert_load_from_buffer(pool, &buf[0], &buf[1],
+                                              &buf[2], &pass, &server_cert);
+        if (status == PJ_SUCCESS) {
+            status = pj_ssl_cert_load_from_buffer(pool, &buf[0], &buf[3],
+                                                  &buf[4], &pass, &client_cert);
+        }
+        if (status == PJ_SUCCESS) {
+            status = echo_test_with_certs(PJ_SSL_SOCK_PROTO_TLS1_2,
+                                         PJ_SSL_SOCK_PROTO_TLS1_2,
+                                         -1, -1, PJ_TRUE, PJ_TRUE, PJ_TRUE,
+                                         server_cert, client_cert);
+        }
+        pj_ssl_cert_wipe_keys(server_cert);
+        pj_ssl_cert_wipe_keys(client_cert);
+        if (status != PJ_SUCCESS)
+            goto on_return;
+    }
+
+on_return:
+    pj_pool_release(pool);
+    return status;
+}
+#endif
 
 
 static pj_bool_t asock_on_data_read(pj_activesock_t *asock,
@@ -2104,12 +2332,39 @@ on_return:
 
 
 /*
- * TLS session resumption test (OpenSSL backend). Opens a server that issues
- * TLS 1.3 session tickets, then makes two client connections to it with
- * session reuse enabled. The first connection must perform a full handshake;
- * the second must resume the cached session.
+ * TLS session resumption test (OpenSSL backend). Opens a server, then makes
+ * two client connections to it with session reuse enabled. The first
+ * connection must perform a full handshake; the second must resume the
+ * cached session if 'expect_reuse'.
+ *
+ * With REUSE_SAME and REUSE_UNTRUSTED, both clients have the same settings
+ * and the server requires a client certificate:
+ * - REUSE_SAME: both ends have the CA list and must report no verification
+ *   error on either connection;
+ * - REUSE_UNTRUSTED: neither end trusts the other's certificate, and a
+ *   resumed connection must report the same verification failure as the
+ *   full handshake.
+ *
+ * With any other 'mode', the second client must not resume the first one's
+ * session:
+ * - REUSE_CA_FILE: only the first client has the CA list, and the second
+ *   must report the server certificate as untrusted;
+ * - REUSE_CA_PATH: the clients have different CA directories;
+ * - REUSE_VERIFY_CB: both clients have a verification callback;
+ * - REUSE_CLI_KEY: both clients have the same client certificate, but only
+ *   the first has its private key.
  */
 #if (PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_OPENSSL)
+
+enum reuse_mode
+{
+    REUSE_SAME,
+    REUSE_UNTRUSTED,
+    REUSE_CA_FILE,
+    REUSE_CA_PATH,
+    REUSE_VERIFY_CB,
+    REUSE_CLI_KEY
+};
 
 static const char reuse_greeting[] = "hello";
 
@@ -2118,8 +2373,13 @@ struct reuse_state
     pj_pool_t      *pool;
     pj_bool_t       is_server;
     pj_bool_t       done;           /* client round completed              */
+    pj_bool_t       closed;         /* client: closed in a callback        */
     pj_status_t     err;
     pj_bool_t       reused;         /* client: was the session resumed     */
+    pj_uint32_t     verify_status;  /* client: server cert verify status   */
+    unsigned        acc_cnt;        /* listener: accepted connections      */
+    pj_bool_t       acc_reused[2];  /* listener: per-connection resumption */
+    pj_uint32_t     acc_verify[2];  /* listener: client cert verify status */
     pj_uint8_t      read_buf[128];
     struct send_key send_key;
 };
@@ -2133,6 +2393,7 @@ static pj_bool_t reuse_on_accept(pj_ssl_sock_t *ssock,
     struct reuse_state *parent_st = (struct reuse_state*)
                                     pj_ssl_sock_get_user_data(ssock);
     struct reuse_state *st;
+    pj_ssl_sock_info info;
     void *read_buf[1];
     pj_ssize_t len;
     pj_status_t status;
@@ -2142,6 +2403,14 @@ static pj_bool_t reuse_on_accept(pj_ssl_sock_t *ssock,
 
     if (accept_status != PJ_SUCCESS)
         return PJ_TRUE;             /* keep listening */
+
+    if (parent_st->acc_cnt < PJ_ARRAY_SIZE(parent_st->acc_reused) &&
+        pj_ssl_sock_get_info(newsock, &info) == PJ_SUCCESS)
+    {
+        parent_st->acc_reused[parent_st->acc_cnt] = info.session_reused;
+        parent_st->acc_verify[parent_st->acc_cnt] = info.verify_status;
+    }
+    parent_st->acc_cnt++;
 
     st = (struct reuse_state*) pj_pool_zalloc(parent_st->pool, sizeof(*st));
     st->pool = parent_st->pool;
@@ -2181,12 +2450,15 @@ static pj_bool_t reuse_on_connect(pj_ssl_sock_t *ssock, pj_status_t status)
     if (status != PJ_SUCCESS) {
         st->err = status;
         st->done = PJ_TRUE;
+        st->closed = PJ_TRUE;
         pj_ssl_sock_close(ssock);
         return PJ_FALSE;
     }
 
-    if (pj_ssl_sock_get_info(ssock, &info) == PJ_SUCCESS)
+    if (pj_ssl_sock_get_info(ssock, &info) == PJ_SUCCESS) {
         st->reused = info.session_reused;
+        st->verify_status = info.verify_status;
+    }
 
     read_buf[0] = st->read_buf;
     status = pj_ssl_sock_start_read2(ssock, st->pool, sizeof(st->read_buf),
@@ -2194,6 +2466,7 @@ static pj_bool_t reuse_on_connect(pj_ssl_sock_t *ssock, pj_status_t status)
     if (status != PJ_SUCCESS) {
         st->err = status;
         st->done = PJ_TRUE;
+        st->closed = PJ_TRUE;
         pj_ssl_sock_close(ssock);
         return PJ_FALSE;
     }
@@ -2220,6 +2493,10 @@ static pj_bool_t reuse_on_read(pj_ssl_sock_t *ssock,
 
     /* Client: receiving the greeting means the NewSessionTicket (if any) has
      * already been processed and cached.
+     *
+     * Don't close the socket here: this may be called from within
+     * pj_ssl_sock_start_read2(), which can't handle the socket being
+     * destroyed. The test closes it once the round is done.
      */
     if (size > 0)
         st->done = PJ_TRUE;
@@ -2228,15 +2505,23 @@ static pj_bool_t reuse_on_read(pj_ssl_sock_t *ssock,
             st->err = status;
         st->done = PJ_TRUE;
     }
-    if (st->done) {
-        pj_ssl_sock_close(ssock);
-        return PJ_FALSE;
-    }
     return PJ_TRUE;
 }
 
-static int session_reuse_test(void)
+static pj_bool_t reuse_on_verify(pj_ssl_sock_t *ssock, pj_bool_t is_server)
 {
+    PJ_UNUSED_ARG(ssock);
+    PJ_UNUSED_ARG(is_server);
+    return PJ_TRUE;
+}
+
+static int session_reuse_test(pj_ssl_sock_proto proto,
+                              pj_bool_t srv_reuse,
+                              enum reuse_mode mode,
+                              pj_bool_t expect_reuse)
+{
+    pj_bool_t same_cfg = (mode == REUSE_SAME || mode == REUSE_UNTRUSTED);
+    pj_bool_t untrusted = (mode == REUSE_UNTRUSTED);
     pj_pool_t *pool = NULL;
     pj_ioqueue_t *ioqueue = NULL;
     pj_timer_heap_t *timer = NULL;
@@ -2246,12 +2531,14 @@ static int session_reuse_test(void)
     pj_sockaddr bind_addr, listen_addr;
     pj_str_t tmp_st;
     pj_bool_t reused[2];
+    pj_uint32_t cli_verify[2];
     int i;
     pj_status_t status;
 
     pj_bzero(&state_serv, sizeof(state_serv));
-    reused[0] = PJ_TRUE;    /* expect full handshake -> should become FALSE */
-    reused[1] = PJ_FALSE;   /* expect resumption     -> should become TRUE  */
+    reused[0] = PJ_TRUE;            /* must become FALSE */
+    reused[1] = !expect_reuse;      /* must become expect_reuse */
+    cli_verify[0] = cli_verify[1] = 0;
 
     pool = pj_pool_create(mem, "ssl_reuse", 512, 512, NULL);
     status = pj_ioqueue_create(pool, 8, &ioqueue);
@@ -2261,15 +2548,15 @@ static int session_reuse_test(void)
     if (status != PJ_SUCCESS)
         goto on_return;
 
-    /* Server: issue TLS 1.3 tickets. */
     pj_ssl_sock_param_default(&param);
     param.cb.on_accept_complete2 = &reuse_on_accept;
     param.cb.on_data_read = &reuse_on_read;
     param.cb.on_data_sent = &ssl_on_data_sent;
     param.ioqueue = ioqueue;
     param.timer_heap = timer;
-    param.proto = PJ_SSL_SOCK_PROTO_TLS1_3;
-    param.enable_session_reuse = PJ_TRUE;
+    param.proto = proto;
+    param.enable_session_reuse = srv_reuse;
+    param.require_client_cert = same_cfg;
     param.user_data = &state_serv;
     state_serv.pool = pool;
     state_serv.is_server = PJ_TRUE;
@@ -2277,10 +2564,31 @@ static int session_reuse_test(void)
     pj_sockaddr_init(PJ_AF_INET, &listen_addr,
                      pj_strset2(&tmp_st, "127.0.0.1"), 0);
 
-    status = ssl_test_create_server(pool, &param, "session_reuse_test",
-                                    &ssock_serv, &listen_addr);
-    if (status != PJ_SUCCESS)
-        goto on_return;
+    {
+        pj_str_t ca = pj_str(CERT_CA_FILE);
+        pj_str_t crt = pj_str(CERT_FILE);
+        pj_str_t key = pj_str(CERT_PRIVKEY_FILE);
+        pj_str_t pass = pj_str(CERT_PRIVKEY_PASS);
+        pj_ssl_cert_t *cert = NULL;
+        pj_ssl_sock_info info;
+
+        status = pj_ssl_sock_create(pool, &param, &ssock_serv);
+        if (status == PJ_SUCCESS)
+            status = pj_ssl_cert_load_from_files(pool,
+                                                 untrusted ? NULL : &ca,
+                                                 &crt, &key, &pass, &cert);
+        if (status == PJ_SUCCESS)
+            status = pj_ssl_sock_set_certificate(ssock_serv, pool, cert);
+        if (status == PJ_SUCCESS)
+            status = pj_ssl_sock_start_accept(ssock_serv, pool, &listen_addr,
+                                        pj_sockaddr_get_len(&listen_addr));
+        if (status != PJ_SUCCESS) {
+            app_perror("...session_reuse_test: server", status);
+            goto on_return;
+        }
+        pj_ssl_sock_get_info(ssock_serv, &info);
+        listen_addr = info.local_addr;
+    }
 
     /* Two client rounds against the same server. */
     for (i = 0; i < 2; ++i) {
@@ -2298,14 +2606,43 @@ static int session_reuse_test(void)
         cparam.cb.on_data_sent = &ssl_on_data_sent;
         cparam.ioqueue = ioqueue;
         cparam.timer_heap = timer;
-        cparam.proto = PJ_SSL_SOCK_PROTO_TLS1_3;
+        cparam.proto = proto;
         cparam.enable_session_reuse = PJ_TRUE;
         cparam.server_name = pj_str("127.0.0.1");
         cparam.user_data = &state_cli;
+        if (mode == REUSE_VERIFY_CB)
+            cparam.cb.on_verify_cb = &reuse_on_verify;
 
         status = pj_ssl_sock_create(pool, &cparam, &ssock_cli);
         if (status != PJ_SUCCESS)
             goto on_return;
+
+        if (mode != REUSE_VERIFY_CB && (mode != REUSE_CA_FILE || i == 0)) {
+            pj_str_t ca_file = pj_str(CERT_CA_FILE);
+            pj_str_t ca_path = pj_str(i == 0 ? CERT_DIR : ".");
+            pj_str_t crt = pj_str(CERT_CLI_FILE);
+            pj_str_t key = pj_str(CERT_CLI_PRIVKEY_FILE);
+            pj_str_t pass = pj_str(CERT_PRIVKEY_PASS);
+            pj_bool_t has_ca = !untrusted && mode != REUSE_CA_PATH;
+            pj_bool_t has_crt = same_cfg || mode == REUSE_CLI_KEY;
+            pj_bool_t has_key = same_cfg || (mode == REUSE_CLI_KEY && i == 0);
+            pj_ssl_cert_t *cert = NULL;
+
+            status = pj_ssl_cert_load_from_files2(pool,
+                                    has_ca ? &ca_file : NULL,
+                                    mode == REUSE_CA_PATH ? &ca_path : NULL,
+                                    has_crt ? &crt : NULL,
+                                    has_key ? &key : NULL,
+                                    has_key ? &pass : NULL,
+                                    &cert);
+            if (status == PJ_SUCCESS)
+                status = pj_ssl_sock_set_certificate(ssock_cli, pool, cert);
+            if (status != PJ_SUCCESS) {
+                app_perror("...session_reuse_test: client cert", status);
+                pj_ssl_sock_close(ssock_cli);
+                goto on_return;
+            }
+        }
 
         pj_sockaddr_init(PJ_AF_INET, &bind_addr,
                          pj_strset2(&tmp_st, "127.0.0.1"), 0);
@@ -2328,6 +2665,15 @@ static int session_reuse_test(void)
             pj_ioqueue_poll(ioqueue, &delay);
             pj_timer_heap_poll(timer, NULL);
         }
+        if (!state_cli.done) {
+            PJ_LOG(1, ("", "...ERROR: connection %d timed out", i + 1));
+            pj_ssl_sock_close(ssock_cli);
+            status = PJ_ETIMEDOUT;
+            goto on_return;
+        }
+
+        if (!state_cli.closed)
+            pj_ssl_sock_close(ssock_cli);
 
         /* Drain so the ticket is fully processed and the server-side socket
          * observes the client close.
@@ -2345,9 +2691,12 @@ static int session_reuse_test(void)
             goto on_return;
         }
 
-        PJ_LOG(3, ("", "...connection %d: session_reused=%d",
-                   i + 1, state_cli.reused));
+        PJ_LOG(3, ("", "...connection %d: session_reused=%d, "
+                   "verify_status cli=0x%x srv=0x%x",
+                   i + 1, state_cli.reused, state_cli.verify_status,
+                   state_serv.acc_verify[i]));
         reused[i] = state_cli.reused;
+        cli_verify[i] = state_cli.verify_status;
     }
 
     if (reused[0]) {
@@ -2355,8 +2704,38 @@ static int session_reuse_test(void)
         status = PJ_EBUG;
         goto on_return;
     }
-    if (!reused[1]) {
-        PJ_LOG(1, ("", "...ERROR: second connection did not resume session"));
+    if (reused[1] != expect_reuse || state_serv.acc_cnt != 2 ||
+        state_serv.acc_reused[1] != expect_reuse)
+    {
+        PJ_LOG(1, ("", "...ERROR: second connection %s session",
+                   expect_reuse ? "did not resume" : "unexpectedly resumed"));
+        status = PJ_EBUG;
+        goto on_return;
+    }
+    if (mode == REUSE_CA_FILE && (cli_verify[0] != 0 || cli_verify[1] == 0)) {
+        PJ_LOG(1, ("", "...ERROR: unexpected verify_status"));
+        status = PJ_EBUG;
+        goto on_return;
+    }
+    for (i = 0; same_cfg && i < 2; ++i) {
+        if (!untrusted && (cli_verify[i] || state_serv.acc_verify[i])) {
+            PJ_LOG(1, ("", "...ERROR: connection %d reports a trusted "
+                       "certificate as unverified", i + 1));
+            status = PJ_EBUG;
+            goto on_return;
+        }
+        if (untrusted && (!cli_verify[i] || !state_serv.acc_verify[i])) {
+            PJ_LOG(1, ("", "...ERROR: connection %d reports an untrusted "
+                       "certificate as verified", i + 1));
+            status = PJ_EBUG;
+            goto on_return;
+        }
+    }
+    if (same_cfg && (cli_verify[1] != cli_verify[0] ||
+                     state_serv.acc_verify[1] != state_serv.acc_verify[0]))
+    {
+        PJ_LOG(1, ("", "...ERROR: second connection reports a different "
+                   "verification status"));
         status = PJ_EBUG;
         goto on_return;
     }
@@ -2384,9 +2763,460 @@ on_return:
 #endif  /* PJ_SSL_SOCK_IMP_OPENSSL */
 
 
+static int cert_verify_name_test(void)
+{
+    enum { NOWC = PJ_SSL_CERT_NAME_NO_WILDCARD,
+           URI = PJ_SSL_CERT_NAME_MATCH_SIP_URI,
+           CN = PJ_SSL_CERT_NAME_MATCH_CN };
+    static const struct test_t {
+        const char *cn;
+        const char *san;     /* "D:" DNS, "I:" IP, "U:" URI, "E:" email,
+                              * ',' separated */
+        const char *name;
+        unsigned flags;
+        pj_status_t result;
+    } tests[] = {
+        /* DNS SAN, exact & case-insensitive */
+        { "x", "D:turn.example.com", "turn.example.com", 0, PJ_SUCCESS },
+        { "x", "D:TURN.Example.com", "turn.example.COM", 0, PJ_SUCCESS },
+        { "x", "D:a.example.com,D:turn.example.com", "turn.example.com", 0,
+          PJ_SUCCESS },
+        { "x", "D:turn.example.com", "turn.example.co", 0, PJ_ENOTFOUND },
+        { "x", "D:turn.example.com", "xturn.example.com", 0, PJ_ENOTFOUND },
+
+        /* Wildcard, accepted by default (RFC 9525 section 1.3) */
+        { "x", "D:*.example.com", "turn.example.com", 0, PJ_SUCCESS },
+        { "x", "D:*.example.com", "turn.example.com", NOWC, PJ_ENOTFOUND },
+        { "x", "D:*.example.com", "a.turn.example.com", 0, PJ_ENOTFOUND },
+        { "x", "D:*.example.com", "example.com", 0, PJ_ENOTFOUND },
+        { "x", "D:*.example.com", ".example.com", 0, PJ_ENOTFOUND },
+        { "x", "D:f*.example.com", "foo.example.com", 0, PJ_ENOTFOUND },
+        { "x", "D:*", "example", 0, PJ_ENOTFOUND },
+        { "x", "D:*.0.0.1", "127.0.0.1", 0, PJ_ENOTFOUND },
+
+        /* Hardening beyond RFC 9525: a wildcard needs two labels after it.
+         * This rejects a wildcard on a top-level domain, not one on every
+         * public suffix, which RFC 9525 section 7.1 puts out of scope.
+         */
+        { "x", "D:*.com", "example.com", 0, PJ_ENOTFOUND },
+        { "x", "D:*.co.uk", "example.co.uk", 0, PJ_SUCCESS },
+
+        /* IP SAN */
+        { "x", "I:192.0.2.1", "192.0.2.1", 0, PJ_SUCCESS },
+        { "x", "I:192.0.2.1", "192.0.2.10", 0, PJ_ENOTFOUND },
+        { "x", "I:2001:db8::1", "2001:DB8:0::1", 0, PJ_SUCCESS },
+        { "x", "D:192.0.2.1", "192.0.2.1", 0, PJ_ENOTFOUND },
+        { "x", "I:192.0.2.1", "example.com", 0, PJ_ENOTFOUND },
+
+        /* SIP URI SAN */
+        { "x", "U:sip:example.com", "example.com", 0, PJ_ENOTFOUND },
+        { "x", "U:sip:example.com", "example.com", URI, PJ_SUCCESS },
+        { "x", "U:sips:example.com", "example.com", URI, PJ_SUCCESS },
+        { "x", "U:http://example.com", "example.com", URI, PJ_ENOTFOUND },
+
+        /* The Common Name is never matched without the flag */
+        { "turn.example.com", "", "turn.example.com", 0, PJ_ENOTFOUND },
+        { "turn.example.com", "", "turn.example.com", CN, PJ_SUCCESS },
+        { "*.example.com", "", "turn.example.com", CN, PJ_SUCCESS },
+        { "*.example.com", "", "turn.example.com", CN | NOWC, PJ_ENOTFOUND },
+        { "192.0.2.1", "", "192.0.2.1", CN, PJ_SUCCESS },
+
+        /* With the flag, any SubjectAltName entry still suppresses it */
+        { "turn.example.com", "D:other.example.com", "turn.example.com", CN,
+          PJ_ENOTFOUND },
+        { "turn.example.com", "I:192.0.2.1", "turn.example.com", CN,
+          PJ_ENOTFOUND },
+        { "turn.example.com", "U:http://x", "turn.example.com", CN,
+          PJ_ENOTFOUND },
+        { "turn.example.com", "U:sip:other.example.com", "turn.example.com",
+          CN, PJ_ENOTFOUND },
+        { "turn.example.com", "E:admin@example.com", "turn.example.com", CN,
+          PJ_ENOTFOUND },
+        { "example.com", "U:sip:x.example.com", "example.com", URI | CN,
+          PJ_ENOTFOUND },
+        { "", "", "", CN, PJ_ENOTFOUND },
+        { "", "", "example.com", CN, PJ_ENOTFOUND },
+    };
+    pj_pool_t *pool;
+    unsigned i;
+    int rc = 0;
+
+    pool = pj_pool_create(mem, "certname", 1000, 1000, NULL);
+    if (!pool)
+        return -1300;
+
+    for (i = 0; i < PJ_ARRAY_SIZE(tests); ++i) {
+        const struct test_t *t = &tests[i];
+        pj_ssl_cert_info ci;
+        const char *p = t->san;
+        pj_str_t name;
+        pj_status_t status;
+
+        pj_bzero(&ci, sizeof(ci));
+        ci.version = 3;
+        pj_cstr(&ci.subject.cn, t->cn);
+        ci.subj_alt_name.entry = pj_pool_calloc(pool, 4,
+                                         sizeof(*ci.subj_alt_name.entry));
+
+        while (*p) {
+            const char *end = pj_ansi_strchr(p, ',');
+            unsigned n = ci.subj_alt_name.cnt++;
+
+            if (!end)
+                end = p + pj_ansi_strlen(p);
+            ci.subj_alt_name.entry[n].type =
+                            (p[0]=='D'? PJ_SSL_CERT_NAME_DNS :
+                             (p[0]=='I'? PJ_SSL_CERT_NAME_IP :
+                              (p[0]=='E'? PJ_SSL_CERT_NAME_RFC822 :
+                               PJ_SSL_CERT_NAME_URI)));
+            pj_strset(&ci.subj_alt_name.entry[n].name, (char*)p + 2,
+                      end - p - 2);
+            p = (*end)? end + 1 : end;
+        }
+
+        status = pj_ssl_cert_verify_name(&ci, pj_cstr(&name, t->name),
+                                         t->flags);
+        if (status != t->result) {
+            PJ_LOG(1,("", "   cert name test #%u failed: cn='%s' san='%s' "
+                      "name='%s' flags=%u: expected %d, got %d",
+                      i, t->cn, t->san, t->name, t->flags, t->result,
+                      status));
+            rc = -1310;
+        }
+    }
+
+    pj_pool_release(pool);
+    return rc;
+}
+
+
+/* Certificate serial number test: a client connects to a server using each
+ * certificate below and checks the peer serial in pj_ssl_cert_info, which
+ * must be right-aligned, most significant octet first, whatever its length.
+ */
+#if TEST_CERT_BUFFER
+
+/* Self-signed P-256 certificates sharing this key, differing in serial */
+static const char serial_key_pem[] =
+    "-----BEGIN PRIVATE KEY-----\n"
+    "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgA/1+nm2ZU4zhz1LP\n"
+    "BIDH/fRgMp1jY8SRiujoDUdad3+hRANCAASlEaaCDVBdjuUHuBPYM20NrJxld6tT\n"
+    "9IchPoUG8ancLepANgl+X3akPDkp22FXuwbdaA+UM/K9wilPQrBgWX17\n"
+    "-----END PRIVATE KEY-----\n";
+
+static const struct serial_cert
+{
+    const char *title;
+    const char *pem;
+    pj_uint8_t  serial_no[20];      /* expected pj_ssl_cert_info value */
+} serial_certs[] =
+{
+    {
+        "2-octet serial",
+        "-----BEGIN CERTIFICATE-----\n"
+        "MIIBPjCB5aADAgECAgIBAjAKBggqhkjOPQQDAjAWMRQwEgYDVQQDDAtzZXJpYWwu\n"
+        "dGVzdDAgFw0yNjA5MjcxNjU3NTVaGA8yMTI2MDkwMzE2NTc1NVowFjEUMBIGA1UE\n"
+        "AwwLc2VyaWFsLnRlc3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASlEaaCDVBd\n"
+        "juUHuBPYM20NrJxld6tT9IchPoUG8ancLepANgl+X3akPDkp22FXuwbdaA+UM/K9\n"
+        "wilPQrBgWX17oyEwHzAdBgNVHQ4EFgQUe2FNKJErdjkiWhPSS5DmAWDvMgUwCgYI\n"
+        "KoZIzj0EAwIDSAAwRQIgZaAdQkVKSAsn5WI9YUfLF5g0/hYy6Lzga3uZjBpkZhoC\n"
+        "IQDalqCmycJuwyAUv+DoSODNOZoqCZJqjpWc3n7b4sXe9g==\n"
+        "-----END CERTIFICATE-----\n",
+        { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+          0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02 }
+    },
+    {
+        /* Encoded in 21 octets, the first being the DER sign octet */
+        "20-octet serial with high bit set",
+        "-----BEGIN CERTIFICATE-----\n"
+        "MIIBUTCB+KADAgECAhUAgQIDBAUGBwgJCgsMDQ4PEBESExQwCgYIKoZIzj0EAwIw\n"
+        "FjEUMBIGA1UEAwwLc2VyaWFsLnRlc3QwIBcNMjYwOTI3MTY1NzU1WhgPMjEyNjA5\n"
+        "MDMxNjU3NTVaMBYxFDASBgNVBAMMC3NlcmlhbC50ZXN0MFkwEwYHKoZIzj0CAQYI\n"
+        "KoZIzj0DAQcDQgAEpRGmgg1QXY7lB7gT2DNtDaycZXerU/SHIT6FBvGp3C3qQDYJ\n"
+        "fl92pDw5KdthV7sG3WgPlDPyvcIpT0KwYFl9e6MhMB8wHQYDVR0OBBYEFHthTSiR\n"
+        "K3Y5IloT0kuQ5gFg7zIFMAoGCCqGSM49BAMCA0gAMEUCIQDrvAJokjUczFvQs9+V\n"
+        "hc7s6XkMeClC95Uo67st+HBIdgIgdk/b943pXuJb3b1hVkXVTyARHUN5GYQzdVdB\n"
+        "nmBB8tU=\n"
+        "-----END CERTIFICATE-----\n",
+        { 0x81, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
+          0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14 }
+    },
+    {
+        /* Longer than the field, and than GnuTLS's 64-octet buffer: only
+         * the first 20 octets are kept
+         */
+        "65-octet serial",
+        "-----BEGIN CERTIFICATE-----\n"
+        "MIIBfzCCASSgAwIBAgJBAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAh\n"
+        "IiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEEwCgYIKoZIzj0EAwIwFjEU\n"
+        "MBIGA1UEAwwLc2VyaWFsLnRlc3QwIBcNMjYxMDE3MjA0MjE2WhgPMjEyNjA5MjMy\n"
+        "MDQyMTZaMBYxFDASBgNVBAMMC3NlcmlhbC50ZXN0MFkwEwYHKoZIzj0CAQYIKoZI\n"
+        "zj0DAQcDQgAEpRGmgg1QXY7lB7gT2DNtDaycZXerU/SHIT6FBvGp3C3qQDYJfl92\n"
+        "pDw5KdthV7sG3WgPlDPyvcIpT0KwYFl9e6MhMB8wHQYDVR0OBBYEFHthTSiRK3Y5\n"
+        "IloT0kuQ5gFg7zIFMAoGCCqGSM49BAMCA0kAMEYCIQC6o1CE3ESGPkSBN/99PfRv\n"
+        "L6q6vBOTTWT5t2UjEY79xAIhAMc0G0mcanwOZ8zaYG1wofdm3ZIngOVXJ60NeCxN\n"
+        "sytA\n"
+        "-----END CERTIFICATE-----\n",
+        { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
+          0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14 }
+    }
+};
+
+struct serial_state
+{
+    pj_pool_t      *pool;
+    pj_bool_t       done;           /* handshake completed or failed      */
+    pj_status_t     err;
+    pj_uint8_t      serial_no[20];  /* client: peer certificate serial    */
+    pj_uint8_t      read_buf[64];
+};
+
+static pj_bool_t serial_on_accept(pj_ssl_sock_t *ssock,
+                                  pj_ssl_sock_t *newsock,
+                                  const pj_sockaddr_t *src_addr,
+                                  int src_addr_len,
+                                  pj_status_t accept_status)
+{
+    struct serial_state *parent_st = (struct serial_state*)
+                                     pj_ssl_sock_get_user_data(ssock);
+    struct serial_state *st;
+    void *read_buf[1];
+
+    PJ_UNUSED_ARG(src_addr);
+    PJ_UNUSED_ARG(src_addr_len);
+
+    parent_st->done = PJ_TRUE;
+    if (accept_status != PJ_SUCCESS)
+        return PJ_TRUE;
+
+    st = (struct serial_state*) pj_pool_zalloc(parent_st->pool, sizeof(*st));
+    st->pool = parent_st->pool;
+    pj_ssl_sock_set_user_data(newsock, st);
+
+    /* Read so we notice the client closing (EOF). */
+    read_buf[0] = st->read_buf;
+    if (pj_ssl_sock_start_read2(newsock, st->pool, sizeof(st->read_buf),
+                                read_buf, 0) != PJ_SUCCESS)
+    {
+        pj_ssl_sock_close(newsock);
+    }
+    return PJ_TRUE;
+}
+
+static pj_bool_t serial_on_connect(pj_ssl_sock_t *ssock, pj_status_t status)
+{
+    struct serial_state *st = (struct serial_state*)
+                              pj_ssl_sock_get_user_data(ssock);
+    pj_ssl_sock_info info;
+
+    if (status == PJ_SUCCESS)
+        status = pj_ssl_sock_get_info(ssock, &info);
+    if (status == PJ_SUCCESS)
+        pj_memcpy(st->serial_no, info.remote_cert_info->serial_no,
+                  sizeof(st->serial_no));
+
+    st->err = status;
+    st->done = PJ_TRUE;
+    pj_ssl_sock_close(ssock);
+    return PJ_FALSE;
+}
+
+static pj_bool_t serial_on_read(pj_ssl_sock_t *ssock,
+                                void *data, pj_size_t size,
+                                pj_status_t status, pj_size_t *remainder)
+{
+    PJ_UNUSED_ARG(data);
+    PJ_UNUSED_ARG(size);
+    PJ_UNUSED_ARG(remainder);
+
+    if (status != PJ_SUCCESS) {
+        pj_ssl_sock_close(ssock);
+        return PJ_FALSE;
+    }
+    return PJ_TRUE;
+}
+
+static void serial_to_hex(const pj_uint8_t *serial_no, char *buf)
+{
+    unsigned i;
+
+    for (i = 0; i < 20; ++i)
+        pj_ansi_snprintf(buf + i * 2, 3, "%02X", serial_no[i]);
+}
+
+static pj_status_t serial_check(pj_pool_t *pool, pj_ioqueue_t *ioqueue,
+                                pj_timer_heap_t *timer,
+                                const struct serial_cert *sc)
+{
+    pj_ssl_sock_t *ssock_serv = NULL;
+    pj_ssl_sock_t *ssock_cli = NULL;
+    pj_ssl_sock_param param;
+    pj_ssl_sock_info info;
+    pj_ssl_cert_t *cert = NULL;
+    pj_ssl_cert_buffer cert_buf, key_buf;
+    struct serial_state state_serv, state_cli;
+    pj_sockaddr bind_addr, listen_addr;
+    pj_str_t tmp_st;
+    unsigned loop;
+    pj_status_t status;
+
+    pj_bzero(&state_serv, sizeof(state_serv));
+    pj_bzero(&state_cli, sizeof(state_cli));
+    state_serv.pool = state_cli.pool = pool;
+
+    pj_ssl_sock_param_default(&param);
+    param.cb.on_accept_complete2 = &serial_on_accept;
+    param.cb.on_connect_complete = &serial_on_connect;
+    param.cb.on_data_read = &serial_on_read;
+    param.ioqueue = ioqueue;
+    param.timer_heap = timer;
+
+    /* === SERVER === */
+    param.user_data = &state_serv;
+    status = pj_ssl_sock_create(pool, &param, &ssock_serv);
+    if (status != PJ_SUCCESS)
+        goto on_return;
+
+    /* The self-signed certificate is its own CA. PEM lengths include the
+     * NUL, which Mbed TLS requires.
+     */
+    pj_strset(&cert_buf, (char*)sc->pem, pj_ansi_strlen(sc->pem) + 1);
+    pj_strset(&key_buf, (char*)serial_key_pem, sizeof(serial_key_pem));
+    status = pj_ssl_cert_load_from_buffer(pool, &cert_buf, &cert_buf,
+                                          &key_buf, NULL, &cert);
+    if (status != PJ_SUCCESS)
+        goto on_return;
+
+    status = pj_ssl_sock_set_certificate(ssock_serv, pool, cert);
+    if (status != PJ_SUCCESS)
+        goto on_return;
+
+    pj_sockaddr_init(PJ_AF_INET, &listen_addr,
+                     pj_strset2(&tmp_st, "127.0.0.1"), 0);
+    status = pj_ssl_sock_start_accept(ssock_serv, pool, &listen_addr,
+                                      pj_sockaddr_get_len(&listen_addr));
+    if (status != PJ_SUCCESS)
+        goto on_return;
+
+    pj_ssl_sock_get_info(ssock_serv, &info);
+    pj_sockaddr_cp(&listen_addr, &info.local_addr);
+
+    /* === CLIENT === */
+    param.user_data = &state_cli;
+    status = pj_ssl_sock_create(pool, &param, &ssock_cli);
+    if (status != PJ_SUCCESS)
+        goto on_return;
+
+    pj_sockaddr_init(PJ_AF_INET, &bind_addr,
+                     pj_strset2(&tmp_st, "127.0.0.1"), 0);
+    status = pj_ssl_sock_start_connect(ssock_cli, pool, &bind_addr,
+                                       &listen_addr,
+                                       pj_sockaddr_get_len(&listen_addr));
+    if (status == PJ_SUCCESS) {
+        serial_on_connect(ssock_cli, PJ_SUCCESS);
+    } else if (status != PJ_EPENDING) {
+        pj_ssl_sock_close(ssock_cli);
+        goto on_return;
+    }
+
+    /* The listener must outlive the server side of the handshake, which
+     * may complete after the client's.
+     */
+    loop = 0;
+    while ((!state_cli.done || !state_serv.done) && loop++ < 1000) {
+        pj_time_val delay = {0, 100};
+        pj_ioqueue_poll(ioqueue, &delay);
+        pj_timer_heap_poll(timer, NULL);
+    }
+
+    if (!state_cli.done) {
+        pj_ssl_sock_close(ssock_cli);
+        status = PJ_ETIMEDOUT;
+    } else {
+        status = state_cli.err;
+    }
+    if (status != PJ_SUCCESS)
+        goto on_return;
+
+    if (pj_memcmp(state_cli.serial_no, sc->serial_no,
+                  sizeof(sc->serial_no)))
+    {
+        char got[41], exp[41];
+
+        serial_to_hex(state_cli.serial_no, got);
+        serial_to_hex(sc->serial_no, exp);
+        PJ_LOG(1, ("", "...ERROR: serial_no %s, expected %s", got, exp));
+        status = PJ_EBUG;
+    }
+
+on_return:
+    if (ssock_serv)
+        pj_ssl_sock_close(ssock_serv);
+
+    /* Let the accepted socket observe the client close. */
+    {
+        pj_time_val delay = {0, 500};
+        loop = 0;
+        while (pj_ioqueue_poll(ioqueue, &delay) > 0 && loop++ < 100)
+            ;
+        pj_timer_heap_poll(timer, NULL);
+    }
+
+    return status;
+}
+
+static int cert_serial_test(void)
+{
+    pj_pool_t *pool;
+    pj_ioqueue_t *ioqueue = NULL;
+    pj_timer_heap_t *timer = NULL;
+    unsigned i;
+    pj_status_t status;
+
+    pool = pj_pool_create(mem, "ssl_serial", 512, 512, NULL);
+    status = pj_ioqueue_create(pool, 8, &ioqueue);
+    if (status != PJ_SUCCESS)
+        goto on_return;
+    status = pj_timer_heap_create(pool, 8, &timer);
+    if (status != PJ_SUCCESS)
+        goto on_return;
+
+    for (i = 0; i < PJ_ARRAY_SIZE(serial_certs); ++i) {
+        PJ_LOG(3, ("", "...%s", serial_certs[i].title));
+        status = serial_check(pool, ioqueue, timer, &serial_certs[i]);
+        if (status != PJ_SUCCESS) {
+            app_perror("...ERROR cert_serial_test()", status);
+            break;
+        }
+    }
+
+on_return:
+    if (timer)
+        pj_timer_heap_destroy(timer);
+    if (ioqueue)
+        pj_ioqueue_destroy(ioqueue);
+    pj_pool_release(pool);
+
+    return (status == PJ_SUCCESS) ? 0 : -1;
+}
+
+#endif  /* TEST_CERT_BUFFER */
+
+
 int ssl_sock_test(void)
 {
     int ret;
+
+#if TEST_CERT_BUFFER
+    ret = cert_buffer_test();
+    if (ret != 0)
+        return ret;
+#endif
+
+    PJ_LOG(3,("", "..certificate name verification test"));
+    ret = cert_verify_name_test();
+    if (ret != 0)
+        return ret;
 
     PJ_LOG(3,("", "..get cipher list test"));
     ret = get_cipher_list();
@@ -2437,7 +3267,50 @@ int ssl_sock_test(void)
 
 #if (PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_OPENSSL)
     PJ_LOG(3,("", "..TLSv1.3 session resumption test"));
-    ret = session_reuse_test();
+    ret = session_reuse_test(PJ_SSL_SOCK_PROTO_TLS1_3, PJ_TRUE, REUSE_SAME,
+                             PJ_TRUE);
+    if (ret != 0)
+        return ret;
+
+    PJ_LOG(3,("", "..TLSv1.3 session resumption test w/ untrusted certs"));
+    ret = session_reuse_test(PJ_SSL_SOCK_PROTO_TLS1_3, PJ_TRUE,
+                             REUSE_UNTRUSTED, PJ_TRUE);
+    if (ret != 0)
+        return ret;
+
+    PJ_LOG(3,("", "..TLSv1.3 no session resumption unless server opts in"));
+    ret = session_reuse_test(PJ_SSL_SOCK_PROTO_TLS1_3, PJ_FALSE,
+                             REUSE_UNTRUSTED, PJ_FALSE);
+    if (ret != 0)
+        return ret;
+
+    PJ_LOG(3,("", "..TLSv1.2 session resumption test w/ untrusted certs"));
+    ret = session_reuse_test(PJ_SSL_SOCK_PROTO_TLS1_2, PJ_FALSE,
+                             REUSE_UNTRUSTED, PJ_TRUE);
+    if (ret != 0)
+        return ret;
+
+    PJ_LOG(3,("", "..TLSv1.3 no session resumption across CA lists"));
+    ret = session_reuse_test(PJ_SSL_SOCK_PROTO_TLS1_3, PJ_TRUE, REUSE_CA_FILE,
+                             PJ_FALSE);
+    if (ret != 0)
+        return ret;
+
+    PJ_LOG(3,("", "..TLSv1.3 no session resumption across CA directories"));
+    ret = session_reuse_test(PJ_SSL_SOCK_PROTO_TLS1_3, PJ_TRUE, REUSE_CA_PATH,
+                             PJ_FALSE);
+    if (ret != 0)
+        return ret;
+
+    PJ_LOG(3,("", "..TLSv1.3 no session resumption with verify callback"));
+    ret = session_reuse_test(PJ_SSL_SOCK_PROTO_TLS1_3, PJ_TRUE, REUSE_VERIFY_CB,
+                             PJ_FALSE);
+    if (ret != 0)
+        return ret;
+
+    PJ_LOG(3,("", "..TLSv1.3 no session resumption without client key"));
+    ret = session_reuse_test(PJ_SSL_SOCK_PROTO_TLS1_3, PJ_TRUE, REUSE_CLI_KEY,
+                             PJ_FALSE);
     if (ret != 0)
         return ret;
 #endif
@@ -2508,6 +3381,13 @@ int ssl_sock_test(void)
     ret = echo_test(PJ_SSL_SOCK_PROTO_DEFAULT, PJ_SSL_SOCK_PROTO_DEFAULT, 
                     -1, -1,
                     PJ_TRUE, PJ_TRUE);
+    if (ret != 0)
+        return ret;
+#endif
+
+#if TEST_CERT_BUFFER
+    PJ_LOG(3,("", "..certificate serial number test"));
+    ret = cert_serial_test();
     if (ret != 0)
         return ret;
 #endif

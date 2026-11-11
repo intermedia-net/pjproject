@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2013-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -60,6 +60,7 @@ DeferredResponse& DeferredResponse::operator=(const DeferredResponse& deferredRe
         transaction = deferredResponse.transaction;
         if(data) {
             pjsip_rx_data_free_cloned(data);
+            data = nullptr;
         }
         auto status = pjsip_rx_data_clone(deferredResponse.data, 0, &data);
         if (status != PJ_SUCCESS) {
@@ -81,6 +82,9 @@ DeferredResponse& DeferredResponse::operator=(DeferredResponse&& deferredRespons
     noexcept
 {
     if (this != &deferredResponse) {
+        if (data) {
+            pjsip_rx_data_free_cloned(data);
+        }
         transaction = deferredResponse.transaction;
         data = deferredResponse.data;
         deferredResponse.data = nullptr;
@@ -399,6 +403,7 @@ void AccountCallConfig::readObject(const ContainerNode &node)
     NODE_READ_UNSIGNED( this_node, timerMinSESec);
     NODE_READ_UNSIGNED( this_node, timerSessExpiresSec);
     NODE_READ_BOOL_OPT( this_node, siprecRequireMetadata);
+    NODE_READ_BOOL_OPT( this_node, mediaAppManaged);
 }
 
 void AccountCallConfig::writeObject(ContainerNode &node) const
@@ -414,6 +419,7 @@ void AccountCallConfig::writeObject(ContainerNode &node) const
     NODE_WRITE_UNSIGNED( this_node, timerMinSESec);
     NODE_WRITE_UNSIGNED( this_node, timerSessExpiresSec);
     NODE_WRITE_BOOL    ( this_node, siprecRequireMetadata);
+    NODE_WRITE_BOOL    ( this_node, mediaAppManaged);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -502,6 +508,9 @@ void AccountNatConfig::readObject(const ContainerNode &node)
     NODE_READ_STRING  ( this_node, udpKaData);
     NODE_READ_INT     ( this_node, contactUseSrcPort);
     NODE_READ_STRINGV ( this_node, iceManualHost);
+    /* Append new fields at the end, optional for older config files */
+    if (this_node.hasUnread() && this_node.unreadName() == "TlsConfig")
+        NODE_READ_OBJ ( this_node, turnTlsConfig);
 }
 
 void AccountNatConfig::writeObject(ContainerNode &node) const
@@ -540,6 +549,7 @@ void AccountNatConfig::writeObject(ContainerNode &node) const
     NODE_WRITE_STRING  ( this_node, udpKaData);
     NODE_WRITE_INT     ( this_node, contactUseSrcPort);
     NODE_WRITE_STRINGV  (this_node, iceManualHost);
+    NODE_WRITE_OBJ     ( this_node, turnTlsConfig);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -748,6 +758,7 @@ void AccountConfig::toPj(pjsua_acc_config &ret) const
     ret.siprec_require_metadata = callConfig.siprecRequireMetadata;
     ret.timer_setting.min_se    = callConfig.timerMinSESec;
     ret.timer_setting.sess_expires = callConfig.timerSessExpiresSec;
+    ret.media_app_managed       = callConfig.mediaAppManaged;
 
     // AccountPresConfig
     for (i=0; i<presConfig.headers.size(); ++i) {
@@ -813,6 +824,7 @@ void AccountConfig::toPj(pjsua_acc_config &ret) const
                             str2Pj(natConfig.turnPassword);
     ret.turn_cfg.turn_auth_cred.data.static_cred.realm = pj_str((char*)"");
     ret.turn_cfg.turn_auth_cred.data.static_cred.nonce = pj_str((char*)"");
+    ret.turn_cfg.turn_tls_setting = natConfig.turnTlsConfig.toTurnPj();
 
     ret.allow_contact_rewrite   = natConfig.contactRewriteUse;
     ret.contact_rewrite_method  = natConfig.contactRewriteMethod;
@@ -941,6 +953,7 @@ void AccountConfig::fromPj(const pjsua_acc_config &prm,
     callConfig.siprecRequireMetadata = PJ2BOOL(prm.siprec_require_metadata);
     callConfig.timerMinSESec    = prm.timer_setting.min_se;
     callConfig.timerSessExpiresSec = prm.timer_setting.sess_expires;
+    callConfig.mediaAppManaged  = PJ2BOOL(prm.media_app_managed);
 
     // AccountPresConfig
     presConfig.headers.clear();
@@ -1014,6 +1027,7 @@ void AccountConfig::fromPj(const pjsua_acc_config &prm,
                 prm.turn_cfg.turn_auth_cred.data.static_cred.data_type;
         natConfig.turnPassword  =
                 pj2Str(prm.turn_cfg.turn_auth_cred.data.static_cred.data);
+        natConfig.turnTlsConfig.fromTurnPj(prm.turn_cfg.turn_tls_setting);
     } else {
         if (!mcfg) {
             pjsua_media_config_default(&default_mcfg);
@@ -1028,6 +1042,7 @@ void AccountConfig::fromPj(const pjsua_acc_config &prm,
                 mcfg->turn_auth_cred.data.static_cred.data_type;
         natConfig.turnPassword  =
                 pj2Str(mcfg->turn_auth_cred.data.static_cred.data);
+        natConfig.turnTlsConfig.fromTurnPj(mcfg->turn_tls_setting);
     }
     natConfig.contactRewriteUse = prm.allow_contact_rewrite;
     natConfig.contactRewriteMethod = prm.contact_rewrite_method;
@@ -1175,20 +1190,35 @@ void Account::shutdown()
 
 void Account::shutdown2(const AccountShutdownParam &prm) PJSUA2_THROW(Error)
 {
-    if (isValid() && pjsua_get_state() < PJSUA_STATE_CLOSING) {
+    if (pjsua_get_state() >= PJSUA_STATE_CLOSING)
+        return;
+
 #if !DEPRECATED_FOR_TICKET_2232
-        // Cleanup buddies in the buddy list
-        while(buddyList.size() > 0) {
-            Buddy *b = buddyList[0];
-            delete b; /* this will remove itself from the list */
-        }
+    // Cleanup buddies in the buddy list
+    while(buddyList.size() > 0) {
+        size_t cnt = buddyList.size();
+
+        /* A buddy removes itself from the list, unless its pjsua buddy is
+         * gone, e.g. after a library restart.
+         */
+        delete buddyList.back();
+        if (buddyList.size() == cnt)
+            buddyList.pop_back();
+    }
 #endif
 
+    /* The account may have been deleted underneath, e.g. by a library
+     * restart, and its id given to a new account.
+     */
+    if (Account::lookup(id) == this) {
         pjsua_acc_del_param del_prm;
         pjsua_acc_del_param_default(&del_prm);
         del_prm.force = prm.force? PJ_TRUE : PJ_FALSE;
         PJSUA2_CHECK_EXPR(pjsua_acc_del2(id, &del_prm));
     }
+
+    /* The id may be given to a new account */
+    id = PJSUA_INVALID_ID;
 }
 
 void Account::modify(const AccountConfig &acc_cfg) PJSUA2_THROW(Error)

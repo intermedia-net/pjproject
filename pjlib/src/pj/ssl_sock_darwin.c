@@ -183,12 +183,8 @@ static pj_status_t create_identity_from_cert(darwinssl_sock_t *dssock,
 
     *p_identity = NULL;
 
-    if (cert->privkey_file.slen || cert->privkey_buf.slen ||
-        cert->privkey_pass.slen)
-    {
-        PJ_LOG(3, (THIS_FILE, "Ignoring supplied private key. Private key "
-                              "must be placed in the keychain instead."));
-    }
+    if (cert->privkey_file.slen || cert->privkey_buf.slen)
+        log_privkey_ignored();
 
 
     if (cert->cert_file.slen) {
@@ -362,8 +358,7 @@ static pj_status_t get_proto_bounds(pj_ssl_sock_proto *p_proto,
     pj_ssl_sock_proto proto = *p_proto;
 
     if (proto == PJ_SSL_SOCK_PROTO_DEFAULT) {
-        /* SSL 2.0 is deprecated. */
-        proto = PJ_SSL_SOCK_PROTO_ALL & ~PJ_SSL_SOCK_PROTO_SSL2;
+        proto = PJ_SSL_SOCK_PROTO_TLS1_2 | PJ_SSL_SOCK_PROTO_TLS1_3;
     }
 
     if (proto & PJ_SSL_SOCK_PROTO_TLS1_3) {
@@ -928,7 +923,8 @@ static void ssl_update_certs_info(pj_ssl_sock_t *ssock)
         count = SecTrustGetCertificateCount(trust);
         if (count > 0) {
             cert = SecTrustGetCertificateAtIndex(trust, 0);
-            get_cert_info(ssock->pool, &ssock->remote_cert_info, cert);
+            get_cert_info(ssock->info_pool, &ssock->remote_cert_info,
+                          cert, PJ_TRUE);
         }
         CFRelease(trust);
     } else if (err != noErr) {
@@ -1207,5 +1203,14 @@ static pj_status_t ssl_renegotiate(pj_ssl_sock_t *ssock)
 
     return PJ_SUCCESS;
 }
+
+PJ_DEF(pj_status_t) pj_ssl_rand_bytes(void *buf, pj_size_t len)
+{
+    PJ_UNUSED_ARG(buf);
+    PJ_UNUSED_ARG(len);
+    PJ_TODO(IMPLEMENT_PJ_SSL_RAND_BYTES);
+    return PJ_ENOTSUP;
+}
+
 
 #endif /* PJ_HAS_SSL_SOCK */
