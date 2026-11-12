@@ -97,7 +97,14 @@ function _build () {
     configure="$configure --with-ssl=$openssl_dir/build"
     configure="$configure --with-opus=$opus_dir/build"
     configure="$configure --with-bcg729=$bcg729_dir/build"
-    configure="$configure --disable-libyuv --disable-speex --disable-video"
+    configure="$configure --disable-libyuv --disable-video"
+    # APPS-30897: exclude codecs not used by the app. Both speex flags are
+    # needed so the Speex library itself is not built/linked.
+    configure="$configure --disable-speex-codec --disable-speex-aec"
+    configure="$configure --disable-gsm-codec --disable-ilbc-codec"
+    # PJMEDIA_HAS_G7221_CODEC already defaults to 0, but without this flag the
+    # third-party G.722.1 library is still built and linked into the framework.
+    configure="$configure --disable-g7221-codec"
     
     export CFLAGS="${CFLAGS} -I$openssl_dir/build/include"
     export LDFLAGS="${LDFLAGS} -L$openssl_dir/build/lib -lstdc++"
@@ -144,12 +151,12 @@ function clean_pjsip_libs () {
     echo "Clean $arch lib directory"
 
     for src_dir in ${PJSIP_LIB_PATHS[*]}; do
-        dir="$PJSIP_SRC_DIR/${src_dir}"
+        dir="$source_dir/${src_dir}"
         if [ -d $dir ]; then
             rm -rf $dir
         fi
 
-        dir="$PJSIP_SRC_DIR/${src_dir}-${arch}"
+        dir="$source_dir/${src_dir}-${arch}"
         if [ -d $dir ]; then
             rm -rf $dir
         fi
