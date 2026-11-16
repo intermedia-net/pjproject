@@ -92,6 +92,7 @@ export PJMEDIA_LDFLAGS += $(PJLIB_LDLIB) \
 export PJMEDIA_AUDIODEV_SRCDIR = ../src/pjmedia-audiodev
 export PJMEDIA_AUDIODEV_OBJS +=  audiodev.o audiotest.o errno.o \
 				 legacy_dev.o null_dev.o pa_dev.o wmme_dev.o \
+				 wasapi_dev_win.o \
 				 alsa_dev.o bb10_dev.o bdimad_dev.o \
 				 android_jni_dev.o opensl_dev.o oboe_dev.o
 export PJMEDIA_AUDIODEV_CFLAGS += $(_CFLAGS)
@@ -155,9 +156,9 @@ export PJMEDIA_CODEC_LDFLAGS += $(PJMEDIA_LDLIB) \
 #
 export PJMEDIA_TEST_SRCDIR = ../src/test
 export PJMEDIA_TEST_OBJS += codec_vectors.o conf_test.o jbuf_test.o main.o mips_test.o \
-			    vid_codec_test.o vid_dev_test.o vid_port_test.o \
-			    rtp_test.o test.o tone_detector_test.o
-export PJMEDIA_TEST_OBJS += sdp_neg_test.o sdp_attr_test.o
+			    vid_codec_test.o vid_conf_test.o vid_dev_test.o vid_port_test.o \
+			    rtp_test.o test.o tone_detector_test.o txt_stream_test.o
+export PJMEDIA_TEST_OBJS += sdp_neg_test.o sdp_attr_test.o transport_srtp_test.o
 export PJMEDIA_TEST_CFLAGS += $(_CFLAGS)
 export PJMEDIA_TEST_CXXFLAGS += $(_CXXFLAGS)
 export PJMEDIA_TEST_LDFLAGS += $(PJMEDIA_CODEC_LDLIB) \

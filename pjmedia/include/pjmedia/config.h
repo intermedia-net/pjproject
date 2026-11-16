@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -146,36 +146,45 @@
  * 2.2. use pjmedia_conf_create2() with pjmedia_conf_param::worker_threads
  * initialized to a value > 0.
  *
- * Default is PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND, 
- * however 
+ * Default is PJMEDIA_CONF_PARALLEL_BRIDGE_BACKEND,
+ * however
  * if PJMEDIA_CONF_USE_SWITCH_BOARD macro was defined, project system
  *   selects PJMEDIA_CONF_SWITCH_BOARD_BACKEND by default,
- * otherwise if PJMEDIA_CONF_THREADS macro was defined, project system 
- *   selects PJMEDIA_CONF_PARALLEL_BRIDGE_BACKEND by default.
+ * otherwise if threads are disabled (PJ_HAS_THREADS is 0), project system
+ *   selects PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND by default.
  */
 #ifndef PJMEDIA_CONF_BACKEND
 #   if defined(PJMEDIA_CONF_USE_SWITCH_BOARD) && PJMEDIA_CONF_USE_SWITCH_BOARD!=0
 #       define PJMEDIA_CONF_BACKEND PJMEDIA_CONF_SWITCH_BOARD_BACKEND
-#   elif defined(PJMEDIA_CONF_THREADS)
+#   elif PJ_HAS_THREADS
 #       define PJMEDIA_CONF_BACKEND PJMEDIA_CONF_PARALLEL_BRIDGE_BACKEND
 #   else
 #       define PJMEDIA_CONF_BACKEND PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND
-#   endif 
+#   endif
 #endif  //PJMEDIA_CONF_BACKEND
 
  /**
  * The default value for the total number of threads, including get_frame()
  * thread, that can be used by the conference bridge.
- * This value is used to determine if the conference bridge should be
- * implemented as a parallel bridge or not.
- * If this value is set to 1, the conference bridge will be implemented as a
- * serial bridge, otherwise it will be implemented as a parallel bridge.
+ * It is only used by the parallel bridge backend
+ * (PJMEDIA_CONF_PARALLEL_BRIDGE_BACKEND): if this value is set to 1, the
+ * bridge processes the ports sequentially in the get_frame() thread without
+ * worker threads, otherwise it processes them in parallel.
  * PJMEDIA_CONF_THREADS should not be less than 1.
  *
- * Default value: 1 - serial bridge
+ * Default value: 1 on iOS, Android, and when threads are disabled, as these
+ * usually handle few calls, 4 otherwise.
  */
 #ifndef PJMEDIA_CONF_THREADS
-#   define PJMEDIA_CONF_THREADS  1
+#   if defined(PJ_DARWINOS) && PJ_DARWINOS!=0
+#       include "TargetConditionals.h"
+#   endif
+#   if !PJ_HAS_THREADS || (defined(PJ_ANDROID) && PJ_ANDROID!=0) || \
+       (defined(PJ_DARWINOS) && PJ_DARWINOS!=0 && TARGET_OS_IPHONE)
+#       define PJMEDIA_CONF_THREADS  1
+#   else
+#       define PJMEDIA_CONF_THREADS  4
+#   endif
 #endif
 
 
@@ -526,6 +535,18 @@
  */
 #ifndef PJMEDIA_RTP_NAT_PROBATION_CNT   
 #  define PJMEDIA_RTP_NAT_PROBATION_CNT         10
+#endif
+
+
+/**
+ * Maximum number of packets an incoming RTP packet can be behind the
+ * highest sequence received to be treated as a late packet, rather than
+ * a sequence restart (RFC 3550 A.1).
+ *
+ * Default: 100
+ */
+#ifndef PJMEDIA_RTP_MAX_MISORDER
+#  define PJMEDIA_RTP_MAX_MISORDER              100
 #endif
 
 

@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -20,6 +20,7 @@
 #include "server.h"
 
 #define SRV_DOMAIN      "pjsip.lab.domain"
+#define CERT_CA_FILE    "../../pjlib/build/cacert.pem"
 #define KA_INTERVAL     50
 #define THIS_FILE       "turn_sock_test.c"
 
@@ -27,6 +28,9 @@ struct test_result
 {
     unsigned    state_called;
     unsigned    rx_data_cnt;
+    pj_status_t last_status;
+    unsigned    conn_status_cnt;
+    pj_status_t last_conn_status;
 };
 
 struct test_session
@@ -40,6 +44,7 @@ struct test_session
     pj_bool_t            destroy_called;
     int                  destroy_on_state;
     pj_bool_t            destroy_on_rx_data;
+    pj_bool_t            destroy_on_conn_status;
     struct test_result   result;
 };
 
@@ -48,6 +53,9 @@ struct test_session_cfg
     struct {
         pj_bool_t       enable_dns_srv;
         int             destroy_on_state;
+        pj_bool_t       tls_verify_server;
+        const char     *tls_ca_file;
+        pj_bool_t       peer_tcp;
     } client;
 
     struct {
@@ -65,6 +73,11 @@ static void turn_on_rx_data(pj_turn_sock *turn_sock,
 static void turn_on_state(pj_turn_sock *turn_sock, 
                           pj_turn_state_t old_state,
                           pj_turn_state_t new_state);
+static void turn_on_connection_status(pj_turn_sock *turn_sock,
+                                      pj_status_t status,
+                                      pj_uint32_t conn_id,
+                                      const pj_sockaddr_t *peer_addr,
+                                      unsigned addr_len);
 
 static void destroy_session(struct test_session *sess)
 {
@@ -107,6 +120,7 @@ static int create_test_session(pj_stun_config  *stun_cfg,
     struct test_session *sess;
     pj_pool_t *pool;
     pj_turn_sock_cb turn_sock_cb;
+    pj_turn_sock_cfg turn_sock_cfg;
     pj_turn_alloc_param alloc_param;
     pj_stun_auth_cred cred;
     pj_status_t status;
@@ -123,11 +137,21 @@ static int create_test_session(pj_stun_config  *stun_cfg,
     pj_bzero(&turn_sock_cb, sizeof(turn_sock_cb));
     turn_sock_cb.on_rx_data = &turn_on_rx_data;
     turn_sock_cb.on_state = &turn_on_state;
+    turn_sock_cb.on_connection_status = &turn_on_connection_status;
+
+    pj_turn_sock_cfg_default(&turn_sock_cfg);
+#if USE_TLS
+    turn_sock_cfg.tls_cfg.verify_server = cfg->client.tls_verify_server;
+    if (cfg->client.tls_ca_file)
+        turn_sock_cfg.tls_cfg.ca_list_file = pj_str((char*)
+                                                    cfg->client.tls_ca_file);
+#endif
+
     status = pj_turn_sock_create(sess->stun_cfg,
                                  GET_AF(use_ipv6),
                                  tp_type, 
                                  &turn_sock_cb, 
-                                 0, 
+                                 &turn_sock_cfg,
                                  sess, 
                                  &sess->turn_sock);
     if (status != PJ_SUCCESS) {
@@ -175,6 +199,8 @@ static int create_test_session(pj_stun_config  *stun_cfg,
     /* Init TURN allocate parameter */
     pj_turn_alloc_param_default(&alloc_param);
     alloc_param.ka_interval = KA_INTERVAL;
+    if (cfg->client.peer_tcp)
+        alloc_param.peer_conn_type = PJ_TURN_TP_TCP;
 
     /* Start the client */
     if (cfg->client.enable_dns_srv) {
@@ -264,8 +290,39 @@ static void turn_on_state(pj_turn_sock *turn_sock,
     }
 
     if (new_state >= PJ_TURN_STATE_DESTROYING) {
+        pj_turn_session_info info;
+
+        if (pj_turn_sock_get_info(turn_sock, &info) == PJ_SUCCESS)
+            sess->result.last_status = info.last_status;
+
         pj_turn_sock_set_user_data(sess->turn_sock, NULL);
         sess->turn_sock = NULL;
+    }
+}
+
+
+static void turn_on_connection_status(pj_turn_sock *turn_sock,
+                                      pj_status_t status,
+                                      pj_uint32_t conn_id,
+                                      const pj_sockaddr_t *peer_addr,
+                                      unsigned addr_len)
+{
+    struct test_session *sess;
+
+    PJ_UNUSED_ARG(conn_id);
+    PJ_UNUSED_ARG(peer_addr);
+    PJ_UNUSED_ARG(addr_len);
+
+    sess = (struct test_session*) pj_turn_sock_get_user_data(turn_sock);
+    if (sess == NULL)
+        return;
+
+    sess->result.conn_status_cnt++;
+    sess->result.last_conn_status = status;
+
+    if (sess->destroy_on_conn_status && !sess->destroy_called) {
+        sess->destroy_called = PJ_TRUE;
+        pj_turn_sock_destroy(turn_sock);
     }
 }
 
@@ -429,6 +486,126 @@ static int state_progression_test(pj_stun_config  *stun_cfg,
     return rc;
 }
 
+
+#if USE_TLS && (PJ_SSL_SOCK_IMP != PJ_SSL_SOCK_IMP_SCHANNEL)
+/* The test server certificate is self-signed with subjectAltName of
+ * "sip.pjsip.lab", "pjsip.lab", and "127.0.0.1", so it does not identify
+ * SRV_DOMAIN.
+ */
+static int tls_verify_server_test(pj_stun_config *stun_cfg)
+{
+    static const struct {
+        const char  *title;
+        pj_bool_t    dns_srv;
+        pj_bool_t    verify;
+        const char  *ca_file;
+        pj_bool_t    expect_ready;
+    } tests[] = {
+        { "trusted, name matches", PJ_FALSE, PJ_TRUE, CERT_CA_FILE, PJ_TRUE },
+        { "untrusted", PJ_FALSE, PJ_TRUE, NULL, PJ_FALSE },
+        { "trusted, name mismatch", PJ_TRUE, PJ_TRUE, CERT_CA_FILE, PJ_FALSE },
+        { "name mismatch, not enforced", PJ_TRUE, PJ_FALSE, CERT_CA_FILE,
+          PJ_TRUE },
+    };
+    struct test_session_cfg test_cfg =
+    {
+        {   /* Client cfg */
+            PJ_FALSE,       /* DNS SRV */
+            0xFFFF          /* Destroy on state */
+        },
+        {   /* Server cfg */
+            0xFFFFFFFF,     /* flags */
+            PJ_TRUE,        /* respond to allocate  */
+            PJ_TRUE         /* respond to refresh   */
+        }
+    };
+    unsigned i;
+
+    PJ_LOG(3,("", "  TLS server verification tests"));
+
+    set_server_flag(&test_cfg, PJ_FALSE, PJ_TURN_TP_TLS);
+    for (i = 0; i < PJ_ARRAY_SIZE(tests); ++i) {
+        enum { TIMEOUT = 60 };
+        struct test_session *sess;
+        struct test_result result;
+        pj_turn_session_info info;
+        pj_time_val tstart;
+        int rc;
+
+#if (PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_MBEDTLS)
+        /* With a CA, this backend verifies and aborts the handshake itself,
+         * even when verification is not enforced.
+         */
+        if (tests[i].ca_file && !tests[i].verify)
+            continue;
+#endif
+
+        PJ_LOG(3,("", "   %s", tests[i].title));
+
+        test_cfg.client.enable_dns_srv = tests[i].dns_srv;
+        test_cfg.client.tls_verify_server = tests[i].verify;
+        test_cfg.client.tls_ca_file = tests[i].ca_file;
+
+        rc = create_test_session(stun_cfg, &test_cfg, &sess);
+        if (rc != 0)
+            return rc;
+
+        pj_bzero(&info, sizeof(info));
+        pj_gettimeofday(&tstart);
+        while (sess->turn_sock) {
+            pj_time_val now;
+
+            poll_events(stun_cfg, 10, PJ_FALSE);
+            if (sess->turn_sock == NULL ||
+                pj_turn_sock_get_info(sess->turn_sock, &info) != PJ_SUCCESS ||
+                info.state >= PJ_TURN_STATE_READY)
+            {
+                break;
+            }
+
+            pj_gettimeofday(&now);
+            if (now.sec - tstart.sec > TIMEOUT) {
+                PJ_LOG(3,("", "    timed-out"));
+                break;
+            }
+        }
+
+        if (sess->turn_sock)
+            pj_turn_sock_destroy(sess->turn_sock);
+        poll_events(stun_cfg, 500, PJ_FALSE);
+        sess->turn_sock = NULL;
+        pj_memcpy(&result, &sess->result, sizeof(result));
+        destroy_session(sess);
+
+        if (tests[i].expect_ready) {
+            if ((result.state_called & (1<<PJ_TURN_STATE_READY)) == 0) {
+                PJ_LOG(3,("", "    error: PJ_TURN_STATE_READY is not called"));
+                return -300;
+            }
+        } else {
+            pj_bool_t status_ok;
+
+            if (result.state_called & (1<<PJ_TURN_STATE_READY)) {
+                PJ_LOG(3,("", "    error: PJ_TURN_STATE_READY is called"));
+                return -310;
+            }
+
+            status_ok = (result.last_status == PJNATH_ETURNTLSCERTVERIF);
+#if (PJ_SSL_SOCK_IMP == PJ_SSL_SOCK_IMP_MBEDTLS)
+            if (tests[i].ca_file && result.last_status != PJ_SUCCESS)
+                status_ok = PJ_TRUE;
+#endif
+            if (!status_ok) {
+                PJ_PERROR(3,("", result.last_status,
+                             "    error: unexpected last status"));
+                return -320;
+            }
+        }
+    }
+
+    return 0;
+}
+#endif
 
 /////////////////////////////////////////////////////////////////////
 
@@ -790,6 +967,139 @@ static int destroy_in_rx_data_test(pj_stun_config *stun_cfg,
 
 /////////////////////////////////////////////////////////////////////
 
+/* ConnectionBind result (RFC 6062) is reported, and the data connection
+ * may be released while its read is being handled.
+ */
+static int conn_bind_test(pj_stun_config *stun_cfg,
+                          pj_bool_t use_ipv6,
+                          pj_bool_t accept_bind)
+{
+    struct test_session_cfg test_cfg =
+    {
+        {   /* Client cfg */
+            PJ_FALSE,       /* DNS SRV */
+            0xFFFF,         /* Destroy on state */
+            PJ_FALSE,       /* TLS verify server */
+            NULL,           /* TLS CA file */
+            PJ_TRUE         /* TCP peer connection */
+        },
+        {   /* Server cfg */
+            0xFFFFFFFF,     /* flags */
+            PJ_TRUE,        /* respond to allocate  */
+            PJ_TRUE         /* respond to refresh   */
+        }
+    };
+    enum { TIMEOUT = 60 };
+    pj_turn_session_info info;
+    struct test_session *sess;
+    pj_sockaddr peer_addr;
+    pj_time_val tstart;
+    int rc;
+
+    PJ_LOG(3,("", "  ConnectionBind %s test (%s)",
+              accept_bind?"success":"failure", use_ipv6?"IPv6":"IPv4"));
+
+    set_server_flag(&test_cfg, use_ipv6, PJ_TURN_TP_TCP);
+
+    rc = create_test_session(stun_cfg, &test_cfg, &sess);
+    if (rc != 0)
+        return rc;
+
+    sess->test_srv->turn_respond_connect = PJ_TRUE;
+    sess->test_srv->turn_accept_conn_bind = accept_bind;
+    sess->destroy_on_conn_status = accept_bind;
+
+    /* Wait until state is READY */
+    pj_bzero(&info, sizeof(info));
+    pj_gettimeofday(&tstart);
+    while (sess->turn_sock) {
+        pj_time_val now;
+
+        poll_events(stun_cfg, 10, PJ_FALSE);
+        if (sess->turn_sock == NULL)
+            break;
+
+        if (pj_turn_sock_get_info(sess->turn_sock, &info) != PJ_SUCCESS)
+            break;
+
+        if (info.state >= PJ_TURN_STATE_READY)
+            break;
+
+        pj_gettimeofday(&now);
+        if (now.sec - tstart.sec > TIMEOUT)
+            break;
+    }
+
+    if (info.state != PJ_TURN_STATE_READY) {
+        PJ_LOG(3,("", "    error: state is not READY"));
+        destroy_session(sess);
+        return -300;
+    }
+
+    pj_sockaddr_init(GET_AF(use_ipv6), &peer_addr, NULL, 1234);
+    if (use_ipv6)
+        peer_addr.ipv6.sin6_addr.s6_addr[15] = 1;
+    else
+        peer_addr.ipv4.sin_addr.s_addr = pj_htonl(0x7f000001);
+
+    rc = pj_turn_sock_connect(sess->turn_sock, &peer_addr,
+                              pj_sockaddr_get_len(&peer_addr));
+    if (rc != PJ_SUCCESS) {
+        PJ_LOG(3,("", "    error: unable to connect to peer"));
+        destroy_session(sess);
+        return -310;
+    }
+
+    /* Connect succeeds, then the server answers the data connection's
+     * ConnectionBind.
+     */
+    pj_gettimeofday(&tstart);
+    while (sess->result.conn_status_cnt == 0) {
+        pj_time_val now;
+
+        poll_events(stun_cfg, 10, PJ_FALSE);
+
+        pj_gettimeofday(&now);
+        if (now.sec - tstart.sec > 5)
+            break;
+    }
+
+    if (sess->result.conn_status_cnt != 1 ||
+        (sess->result.last_conn_status == PJ_SUCCESS) != accept_bind)
+    {
+        PJ_LOG(3,("", "    error: expecting ConnectionBind %s, got %d "
+                  "status report(s), last status %d",
+                  accept_bind?"success":"failure",
+                  sess->result.conn_status_cnt,
+                  sess->result.last_conn_status));
+        destroy_session(sess);
+        return -320;
+    }
+
+    /* Wait for the graceful deallocation before releasing the session */
+    if (!sess->destroy_called) {
+        sess->destroy_called = PJ_TRUE;
+        pj_turn_sock_destroy(sess->turn_sock);
+    }
+    pj_gettimeofday(&tstart);
+    while (sess->turn_sock) {
+        pj_time_val now;
+
+        poll_events(stun_cfg, 10, PJ_FALSE);
+
+        pj_gettimeofday(&now);
+        if (now.sec - tstart.sec > TIMEOUT)
+            break;
+    }
+
+    destroy_session(sess);
+    poll_events(stun_cfg, 500, PJ_FALSE);
+    return 0;
+}
+
+
+/////////////////////////////////////////////////////////////////////
+
 int turn_sock_test(void *p)
 {
     unsigned n = (int)(intptr_t)p;
@@ -823,6 +1133,14 @@ int turn_sock_test(void *p)
     if (rc != 0) 
         goto on_return;
 
+#if USE_TLS && (PJ_SSL_SOCK_IMP != PJ_SSL_SOCK_IMP_SCHANNEL)
+    if (tp_type == PJ_TURN_TP_TLS) {
+        rc = tls_verify_server_test(&app_sess.stun_cfg);
+        if (rc != 0)
+            goto on_return;
+    }
+#endif
+
     for (i=0; i<=1; ++i) {
         int j;
         for (j=0; j<=1; ++j) {
@@ -844,6 +1162,17 @@ int turn_sock_test(void *p)
             if (rc != 0)
                 goto on_return;
         }
+    }
+
+    /* TCP peer connections (RFC 6062) need TCP to the server */
+    if (tp_type == PJ_TURN_TP_TCP) {
+        rc = conn_bind_test(&app_sess.stun_cfg, USE_IPV6, PJ_FALSE);
+        if (rc != 0)
+            goto on_return;
+
+        rc = conn_bind_test(&app_sess.stun_cfg, USE_IPV6, PJ_TRUE);
+        if (rc != 0)
+            goto on_return;
     }
 
 on_return:

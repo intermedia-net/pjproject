@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -92,7 +92,12 @@ int test_main(int argc, char *argv[])
 #endif
 
 #if HAS_VID_PORT_TEST
-    UT_ADD_TEST(&test_app.ut_app, vid_port_test, 0);
+    /* Exclusive: it registers a test video device factory */
+    UT_ADD_TEST(&test_app.ut_app, vid_port_test, PJ_TEST_EXCLUSIVE);
+#endif
+
+#if HAS_VID_CONF_TEST
+    UT_ADD_TEST(&test_app.ut_app, vid_conf_test, 0);
 #endif
 
 #if HAS_VID_DEV_TEST
@@ -114,6 +119,14 @@ int test_main(int argc, char *argv[])
     UT_ADD_TEST(&test_app.ut_app, conf_test, 0);
 #if HAS_TONE_DETECTOR_TEST
     UT_ADD_TEST(&test_app.ut_app, tone_detector_test, 0);
+#endif
+#if HAS_TXT_STREAM_TEST
+    /* Creates/destroys a local pjmedia_endpt (see codec_test_vectors). */
+    UT_ADD_TEST(&test_app.ut_app, txt_stream_test, PJ_TEST_EXCLUSIVE);
+#endif
+#if HAS_TRANSPORT_SRTP_TEST
+    /* Creates/destroys a local pjmedia_endpt (see codec_test_vectors). */
+    UT_ADD_TEST(&test_app.ut_app, transport_srtp_test, PJ_TEST_EXCLUSIVE);
 #endif
 #if HAS_CODEC_VECTOR_TEST
     /* Run in exclusive mode: creates/destroys a local pjmedia_endpt which

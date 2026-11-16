@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2013 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2013-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -147,9 +147,17 @@ typedef std::vector<SslCertName> SslCertNameVector;
 struct SslCertInfo
 {
     unsigned            version;            /**< Certificate version    */
-    unsigned char       serialNo[20];       /**< Serial number, array
-                                                 of octets, first index
-                                                 is MSB                 */
+    unsigned char       serialNo[20];       /**< Serial number, most
+                                                 significant octet first,
+                                                 right-aligned and padded
+                                                 with leading zero octets.
+                                                 A serial longer than 20
+                                                 octets keeps its 20 most
+                                                 significant octets. A
+                                                 negative serial, which
+                                                 RFC 5280 does not allow,
+                                                 has a layout that depends
+                                                 on the backend.        */
     string              subjectCn;          /**< Subject common name    */
     string              subjectInfo;        /**< One line subject, fields
                                                  are separated by slash, e.g:
@@ -738,9 +746,9 @@ struct DigestChallenge
     void fromPj(const pjsip_digest_challenge &prm);
 
     /**
-     * Convert to pjsip
+     * Convert to pjsip. Strings and parameters are allocated from the pool.
      */
-    pjsip_digest_challenge toPj() const;
+    void toPj(pj_pool_t *pool, pjsip_digest_challenge &chal) const;
 };
 
 /**
@@ -810,9 +818,9 @@ struct DigestCredential
     void fromPj(const pjsip_digest_credential &prm);
 
     /**
-     * Convert to pjsip
+     * Convert to pjsip. Strings and parameters are allocated from the pool.
      */
-    pjsip_digest_credential toPj() const;
+    void toPj(pj_pool_t *pool, pjsip_digest_credential &cred) const;
 };
 
 
@@ -890,6 +898,11 @@ struct UaConfig : public PersistentObject
      * Array of nameservers to be used by the SIP resolver subsystem.
      * The order of the name server specifies the priority (first name
      * server will be used first, unless it is not reachable).
+     *
+     * Each entry is an IP address or a hostname with an optional port,
+     * e.g: "8.8.8.8", "10.0.0.1:5353", or "[2001:db8::1]:5353". Invalid
+     * entries are ignored if at least one entry is valid. The nameservers
+     * can be changed later with Endpoint::updateNameservers().
      */
     StringVector        nameserver;
 
@@ -1015,6 +1028,49 @@ struct UaConfig : public PersistentObject
      * Default: PJSUA_ACC_SERVER_AFFINITY_DEFAULT
      */
     bool                accServerAffinityDefault;
+
+    /**
+     * Send a request again to the next server when the server answers 503
+     * or doesn't answer, such as the next DNS SRV target of the registrar,
+     * and remember the servers that failed. See also
+     * pjsua_config.server_failover.
+     *
+     * Default: PJSIP_SERVER_FAILOVER (disabled)
+     */
+    bool                serverFailover;
+
+    /**
+     * Resolve with the system resolver while no nameserver answers. See
+     * also pjsua_config.resolver_fallback. Note that libDestroy() turns
+     * it off first, so that unregistering starts no lookup, and then waits
+     * for the lookups already running, up to the timeout of the system
+     * resolver: on a mobile device, call it off the main thread.
+     *
+     * Default: PJ_DNS_RESOLVER_SYS_FALLBACK (disabled)
+     */
+    bool                resolverFallback;
+
+    /**
+     * Enable Call::onCallSendAck() for application-controlled ACK handling.
+     * Set this before Endpoint::libInit(). When disabled, PJSIP sends ACK
+     * automatically without invoking the callback.
+     *
+     * Default: false
+     */
+    bool                enableCallSendAckCallback;
+
+    /**
+     * Invoke Call::onCallRxReinvite() for re-INVITEs without SDP on
+     * ordinary calls. The callback receives an empty offer and may accept,
+     * reject, or asynchronously answer the request.
+     *
+     * Application-managed calls receive this notification regardless of
+     * this setting. When disabled, ordinary calls handle offerless
+     * re-INVITEs automatically without invoking the callback.
+     *
+     * Default: false
+     */
+    bool                notifyOfferlessReinvite;
 
 public:
     /**
@@ -1208,10 +1264,9 @@ public:
     /**
      * Total number of threads that can be used by the conference bridge
      * including get_frame() thread.
-     * This value is used to determine if the conference bridge should be
-     * implemented as a parallel bridge or not.
-     * If this value is set to 1, the conference bridge will be implemented as a
-     * serial bridge, otherwise it will be implemented as a parallel bridge.
+     * If this value is set to 1, the conference bridge processes the ports
+     * sequentially in the get_frame() thread, otherwise it processes them
+     * in parallel using additional worker threads.
      * Should not be less than 1.
      * This value is ignored by all conference backends except for the 
      * multithreaded conference bridge backend
@@ -1220,6 +1275,20 @@ public:
      * Default value: PJMEDIA_CONF_THREADS
      */
     unsigned            confThreads;
+
+    /**
+     * The priority of the conference bridge worker threads, see
+     * pjmedia_conf_param::worker_thread_prio for more info. The valid value
+     * range is platform dependent, while zero means the worker threads will
+     * use the priority assigned by the OS, and PJMEDIA_CONF_THREAD_PRIO_MAX
+     * the highest priority.
+     * This value is ignored by all conference backends except for the
+     * multithreaded conference bridge backend
+     * (PJMEDIA_CONF_PARALLEL_BRIDGE_BACKEND).
+     *
+     * Default value: PJMEDIA_CONF_THREAD_PRIO_MAX
+     */
+    int                 confThreadPrio;
 
     /**
      * Specify whether the media manager should manage its own
@@ -1359,8 +1428,11 @@ public:
 
     /**
      * Specify idle time of sound device before it is automatically closed,
-     * in seconds. Use value -1 to disable the auto-close feature of sound
-     * device
+     * in seconds. The sound device is idle when there is no active call and
+     * no connection in the conference bridge. This also applies to a sound
+     * device opened by the application, e.g. via
+     * AudDevManager::setPlaybackDev() or AudDevManager::setNullDev(). Use
+     * value -1 to disable the auto-close feature of sound device.
      *
      * Default : 1
      */
@@ -1727,6 +1799,21 @@ public:
      */
     void natUpdateStunServers(const StringVector &prmServers,
                               bool prmWait) PJSUA2_THROW(Error);
+
+    /**
+     * Update the nameservers of the DNS resolver, e.g: after the device
+     * has moved to another network. Cached DNS responses are discarded.
+     * An empty list disables the DNS resolver, the same as when no
+     * nameserver is configured. This function may block if an entry is a
+     * hostname. The libInit() must have been called before calling this
+     * function.
+     *
+     * @param prmServers        Array of nameservers, at most four. Please
+     *                          see UaConfig.nameserver about the format
+     *                          of the entries.
+     */
+    void updateNameservers(const StringVector &prmServers)
+                           PJSUA2_THROW(Error);
 
     /**
      * Auxiliary function to resolve and contact each of the STUN server
@@ -2107,7 +2194,9 @@ public:
      *    configurable via \a AccountConfig.ipChangeConfig.shutdownTp).
      * 3. Update contact URI by sending re-Registration (this step is 
      *    configurable via a\ AccountConfig.natConfig.contactRewriteUse and
-     *    a\ AccountConfig.natConfig.contactRewriteMethod)
+     *    a\ AccountConfig.natConfig.contactRewriteMethod). An account
+     *    unregistered with Account::setRegistration() is not registered
+     *    again.
      * 4. Hangup active calls (this step is configurable via
      *    a\ AccountConfig.ipChangeConfig.hangupCalls) or
      *    continue the call by sending re-INVITE
@@ -2375,6 +2464,8 @@ private:
                                     pjmedia_sdp_session *sdp,
                                     pj_pool_t *pool,
                                     const pjmedia_sdp_session *rem_sdp);
+    static pj_bool_t on_call_send_ack(pjsua_call_id call_id,
+                                 pjsip_rx_data *rdata);
     static void on_stream_precreate(pjsua_call_id call_id,
                                     pjsua_on_stream_precreate_param *param);
     static void on_stream_created2(pjsua_call_id call_id,
@@ -2486,4 +2577,3 @@ private:
 
 
 #endif  /* __PJSUA2_UA_HPP__ */
-

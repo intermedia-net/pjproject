@@ -1,3 +1,5 @@
+include(CMakeDependentOption)
+
 # ##############################################################################
 # pjsua
 
@@ -38,3 +40,48 @@ target_link_libraries(aidemo
     pjmedia-audiodev
     pjmedia-videodev
 )
+
+add_executable(embedded_ua src/samples/embedded_ua.c)
+target_link_libraries(embedded_ua
+  PRIVATE
+    pjlib
+    pjlib-util
+    pjnath
+    pjmedia
+    pjmedia-codec
+    pjmedia-audiodev
+    pjsip
+    pjsip-ua
+)
+
+if(PJ_WITH_CXX)
+add_executable(pjsua2_demo src/samples/pjsua2_demo.cpp)
+target_link_libraries(pjsua2_demo
+  PRIVATE
+    pjlib
+    pjlib-util
+    pjnath
+    pjmedia
+    pjmedia-audiodev
+    pjmedia-videodev
+    pjsip
+    pjsip-simple
+    pjsip-ua
+    pjsua-lib
+    pjsua2
+)
+endif() # PJ_WITH_CXX
+
+# ##############################################################################
+# SWIG bindings
+
+# Off by default: SWIG is a build dependency nothing else here needs, and most
+# people configuring this project only want the libraries. Gradle turns it on.
+cmake_dependent_option(PJ_BUILD_SWIG_JAVA
+  "Build the pjsua2 JNI bindings with SWIG" OFF
+  "ANDROID;PJ_WITH_CXX" OFF
+)
+
+if(PJ_BUILD_SWIG_JAVA)
+  add_subdirectory(src/swig)
+endif()

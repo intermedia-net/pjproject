@@ -4,7 +4,8 @@ on:
     branches:
       - 'master'
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref (e.g. a force-push to a PR) so they
 # stop holding CI runner slots.
@@ -19,7 +20,10 @@ env:
   CI_RUNNER: python ${{ github.workspace }}/cirunner/cirunner.py -t 3600 -o ${{ github.workspace }}/artifacts --
   MAKE_FAST: make -j 3
 jobs:
+  # Draft PRs run the build only jobs. Skipping this job skips every test job
+  # that needs it.
   detect-changes:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     outputs:
       # Aggregate dependency groups — each combines the raw path filters
@@ -35,6 +39,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: dorny/paths-filter@v3
+      if: github.event_name == 'pull_request'
       id: filter
       with:
         filters: |
@@ -105,7 +110,7 @@ jobs:
   default-full-bundle-1:
     # full bundle: enable all codecs + AEC + DTLS
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.any_src == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.any_src == 'true'
     runs-on: ubuntu-latest
     name: Default / pjsua
     steps:
@@ -169,7 +174,7 @@ jobs:
 
   default-full-bundle-2:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.pjnath_deps == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.pjnath_deps == 'true'
     runs-on: ubuntu-latest
     name: Default / pjlib,util,pjnath
     steps:
@@ -203,7 +208,7 @@ jobs:
 
   default-full-bundle-3:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.pjmedia_pjsip_deps == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.pjmedia_pjsip_deps == 'true'
     runs-on: ubuntu-latest
     name: Default / pjmedia,pjsip
     steps:
@@ -233,7 +238,7 @@ jobs:
 
   no-tls:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.pjsip_deps == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.pjsip_deps == 'true'
     runs-on: ubuntu-latest
     name: No SSL / pjlib,pjsip
     steps:
@@ -267,7 +272,7 @@ jobs:
     needs: [detect-changes]
     # any_src, not pjlib_deps: the no-pthread guarantee covers the upper layers
     # too, e.g. pjmedia's alsa_dev.c.
-    if: github.event_name == 'push' || needs.detect-changes.outputs.any_src == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.any_src == 'true'
     runs-on: ubuntu-latest
     name: No threads / pjlib
     steps:
@@ -309,6 +314,8 @@ jobs:
         exit $rc
     - name: pjlib-test
       run: make pjlib-test
+    - name: pjlib-util-test (resolver without threads)
+      run: cd pjlib-util/build && ../bin/pjlib-util-test-`make -s -C ../.. infotarget` $CI_MODE resolver_nothreads_test
     - name: upload artifacts on failure
       if: ${{ failure() }}
       uses: actions/upload-artifact@v4
@@ -321,7 +328,7 @@ jobs:
 
   gnu-tls:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.pjnath_pjsip_deps == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.pjnath_pjsip_deps == 'true'
     runs-on: ubuntu-latest
     name: GnuTLS / pjlib,pjnath,pjsip
     steps:
@@ -357,9 +364,88 @@ jobs:
         name: ${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ github.run_id }}
         path: artifacts
 
+  # Mbed TLS backend, with both supported major versions. The full suites run
+  # in the Default jobs; only what depends on the TLS backend runs here.
+  mbedtls:
+    needs: [detect-changes]
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.any_src == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: 3.6.7
+            sha256: a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6
+            config_py: scripts/config.py
+          - version: 4.2.0
+            sha256: 2bed9d713b4668f76553b097e72b8aa30bc8f112a940d7ae228d524bbde6ffea
+            config_py: tf-psa-crypto/scripts/config.py
+    name: Mbed TLS ${{ matrix.version }} / pjlib,pjnath,pjsua
+    steps:
+    - uses: actions/checkout@v2
+    - name: Mbed TLS prefix
+      run: echo "MBEDTLS_PREFIX=$HOME/mbedtls-${{ matrix.version }}" >> $GITHUB_ENV
+    - name: cache Mbed TLS
+      id: cache-mbedtls
+      uses: actions/cache@v4
+      with:
+        path: ~/mbedtls-${{ matrix.version }}
+        # Bump the suffix when the build recipe below changes
+        key: mbedtls-${{ matrix.version }}-${{ runner.os }}-threading-1
+    - name: build Mbed TLS
+      if: steps.cache-mbedtls.outputs.cache-hit != 'true'
+      run: |
+        cd $RUNNER_TEMP
+        curl -sSfL -o mbedtls.tar.bz2 \
+          https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-${{ matrix.version }}/mbedtls-${{ matrix.version }}.tar.bz2
+        echo "${{ matrix.sha256 }}  mbedtls.tar.bz2" | sha256sum -c
+        tar xjf mbedtls.tar.bz2
+        cd mbedtls-${{ matrix.version }}
+        # PJSIP's threads share PSA Crypto, which needs the threading layer
+        python3 ${{ matrix.config_py }} set MBEDTLS_THREADING_C
+        python3 ${{ matrix.config_py }} set MBEDTLS_THREADING_PTHREAD
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+              -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
+              -DCMAKE_INSTALL_PREFIX=$MBEDTLS_PREFIX
+        cmake --build build -j 3
+        cmake --install build
+    - name: config site
+      run: echo -e "#define PJ_TODO(x)\n" > pjlib/include/pj/config_site.h
+    - name: configure
+      run: ./configure --with-mbedtls=$MBEDTLS_PREFIX
+    - name: make
+      run: $MAKE_FAST
+    - name: get SSL info
+      run: pjlib/bin/pjlib-test-`make infotarget` --config --list | grep SSL
+    - name: verify mbedtls is used
+      run: pjlib/bin/pjlib-test-`make infotarget` --config --list | grep -E 'PJ_SSL_SOCK_IMP\s+:\s+6'
+    - name: pjlib-test (ssl_sock only)
+      run: cd pjlib/build && ../bin/pjlib-test-`make -s -C ../.. infotarget` $CI_MODE $CI_ARGS ssl_sock_test ssl_sock_stress_test
+    - name: pjnath-test (turn_sock_test only)
+      run: cd pjnath/build && ../bin/pjnath-test-`make -s -C ../.. infotarget` $CI_MODE $CI_ARGS turn_sock_test
+    - name: set up Python 3.10 for pjsua test
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.10'
+    # pjsip-test has no TLS tests. These are SIP calls over TLS between two
+    # pjsua, one acting as the TLS server, and SDES-SRTP calls, whose keys
+    # come from Mbed TLS.
+    - name: pjsua-test (TLS and SDES-SRTP only)
+      run: |
+        cd tests/pjsua
+        for t in 220_tls 230_sips 150_srtp_1_1 150_srtp_2_2; do
+          python run.py mod_call.py scripts-call/$t.py || exit 1
+        done
+    - name: upload artifacts on failure
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ matrix.version }}-${{ github.run_id }}
+        path: artifacts
+
   vid-openh264-1:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.any_src == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.any_src == 'true'
     runs-on: ubuntu-latest
     name: OpenH264+VPX / pjsua
     steps:
@@ -434,7 +520,7 @@ jobs:
 
   vid-openh264-2:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.pjnath_deps == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.pjnath_deps == 'true'
     runs-on: ubuntu-latest
     name: OpenH264+VPX / pjlib,util,pjnath
     steps:
@@ -479,7 +565,7 @@ jobs:
 
   vid-openh264-3:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.pjmedia_pjsip_deps == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.pjmedia_pjsip_deps == 'true'
     runs-on: ubuntu-latest
     name: OpenH264+VPX / pjmedia,pjsip
     steps:
@@ -528,7 +614,7 @@ jobs:
 
   vid-ffmpeg:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.pjmedia_deps == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.pjmedia_deps == 'true'
     runs-on: ubuntu-latest
     name: FFMPEG+x264 / pjmedia
     steps:
@@ -542,7 +628,7 @@ jobs:
     - name: get ffmpeg
       run: git clone --depth 1 --single-branch --branch release/4.2 https://github.com/FFmpeg/FFmpeg.git
     - name: configure ffmpeg
-      run: cd FFmpeg && ./configure --enable-shared --disable-static --enable-gpl --enable-libx264
+      run: cd FFmpeg && ./configure --enable-shared --disable-static --enable-gpl --enable-libx264 --disable-doc
     - name: build ffmpeg
       run: cd FFmpeg && $MAKE_FAST && sudo make install
     - name: config site
@@ -585,7 +671,7 @@ jobs:
 
   ioq-epoll-cb-with-lock-conf-thread:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.any_src == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.any_src == 'true'
     runs-on: ubuntu-latest
     name: ioq-epoll-cb-with-lock-conf-thread / pjlib,pjsua
     steps:
@@ -631,7 +717,7 @@ jobs:
 
   ioq-no-fast-track:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.pjlib_deps == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.pjlib_deps == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -686,7 +772,7 @@ jobs:
     # Build pjsua-lib with PJSUA_MEDIA_HAS_PJMEDIA=0 (third-party media mode)
     # and test the alt_pjsua sample application.
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.any_src == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.any_src == 'true'
     runs-on: ubuntu-latest
     name: alt_pjsua / 3rdparty media
     steps:
@@ -722,6 +808,15 @@ jobs:
         python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uas-custom-sdp.xml
         python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uas-amr-sdp.xml
         python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uas-static-pt-no-rtpmap.xml
+        python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uac-sdp-passthrough.xml
+        python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uas-sdp-passthrough.xml
+        python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uas-multiple-amr.xml
+        python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uas-media-app-managed.xml
+        python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uas-early-update-app-managed.xml
+        python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uac-late-offer.xml
+        python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uas-late-offer.xml
+        python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uac-late-offer-dummy-codecs.xml
+        python3 run.py --exe ../../pjsip-apps/src/3rdparty_media_sample/alt_pjsua mod_sipp.py scripts-sipp/alt-pjsua-uas-late-offer-dummy-codecs.xml
     - name: upload artifacts on failure
       if: ${{ failure() }}
       uses: actions/upload-artifact@v4
@@ -758,13 +853,139 @@ jobs:
         cmake --build build-consumer --verbose
         ./build-consumer/test_consumer
         ./build-consumer/test_consumer2
+    - name: test pkg-config
+      run: |
+        prefix=${{ runner.temp }}/pj-install
+        test -f "$prefix/lib/libpjlib.a" && test ! -e "$prefix/bin/libpjlib.a"
+        export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
+        cat "$PKG_CONFIG_PATH/libpjproject.pc"
+        cc tests/cmake/test_consumer.c -o pc_consumer \
+          $(pkg-config --static --cflags --libs libpjproject)
+        ./pc_consumer
+
+  # The pure C configuration: everything that needs C++ is left out, and
+  # nothing left in may reference it.
+  cmake-build-c-only:
+    runs-on: ubuntu-latest
+    name: CMake / C only
+    steps:
+    - uses: actions/checkout@v4
+    - name: install dependencies
+      run: sudo apt-get update && sudo apt-get install -y libssl-dev
+    - name: configure
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DPJ_WITH_CXX=OFF
+    - name: check
+      run: |
+        if grep '^CMAKE_CXX_COMPILER' build/CMakeCache.txt; then exit 1; fi
+        grep '^#define PJ_HAS_ATOMIC_QUEUE 0' build/pjlib/include/pj/compat/os_auto.h
+    - name: build
+      run: cmake --build build -j $(nproc)
+    - name: install
+      run: cmake --install build --prefix ${{ runner.temp }}/pj-install
+    - name: test find_package
+      run: |
+        cmake -B build-consumer tests/cmake \
+          -DCMAKE_PREFIX_PATH=${{ runner.temp }}/pj-install \
+          -DCMAKE_BUILD_TYPE=Release
+        cmake --build build-consumer --verbose
+        ./build-consumer/test_consumer
+        test ! -e build-consumer/test_consumer2
+    - name: test pkg-config
+      run: |
+        export PKG_CONFIG_PATH="${{ runner.temp }}/pj-install/lib/pkgconfig"
+        cat "$PKG_CONFIG_PATH/libpjproject.pc"
+        if grep -e -lpjsua2 -e -lstdc++ "$PKG_CONFIG_PATH/libpjproject.pc"; then exit 1; fi
+        cc tests/cmake/test_consumer.c -o pc_consumer \
+          $(pkg-config --static --cflags --libs libpjproject)
+        ./pc_consumer
+
+  # What a configure generates must not depend on values an earlier configure
+  # of the same build directory left in the cache; see
+  # tests/cmake/reconfigure.sh.
+  cmake-reconfigure:
+    runs-on: ubuntu-latest
+    name: CMake / reconfigure
+    steps:
+    - uses: actions/checkout@v4
+    - name: install dependencies
+      run: sudo apt-get update && sudo apt-get install -y libssl-dev
+    - name: reconfigure vs fresh configure
+      run: tests/cmake/reconfigure.sh . ${{ runner.temp }}/reconfigure
+
+  # Cross configure for a system CMake calls Generic (no OS, or an RTOS that
+  # brings its own build system), with the Arm GNU toolchain Ubuntu packages.
+  # A socket layer and pthreads come from the RTOS, so pjlib cannot link yet;
+  # this guards the configure, the toolchain file, the generated headers and
+  # the pjlib sources that need only the C library's headers.
+  cmake-cross-arm-none-eabi:
+    runs-on: ubuntu-latest
+    name: CMake / cross arm-none-eabi
+    steps:
+    - uses: actions/checkout@v4
+    - name: install toolchain
+      run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
+    - name: configure
+      run: |
+        cmake -B build-cross --toolchain cmake/toolchains/arm-none-eabi.cmake \
+          -DPJ_WITH_CXX=OFF -DPJ_BUILD_APPS=OFF -DBUILD_TESTING=OFF \
+          -DPJLIB_WITH_SSL= -DPJ_SKIP_EXPERIMENTAL_NOTICE=ON
+    - name: check
+      # the toolchain's libm rather than the host's, no C++ compiler, and
+      # the SIMD probe kept NEON away from Cortex-M
+      run: |
+        grep '^MATH_LIBRARY:FILEPATH=/usr/lib/arm-none-eabi/' build-cross/CMakeCache.txt
+        if grep '^CMAKE_CXX_COMPILER' build-cross/CMakeCache.txt; then exit 1; fi
+        if grep -e WEBRTC_HAS_NEON -e -mfpu=neon build-cross/third_party/webrtc/CMakeFiles/webrtc.dir/flags.make; then exit 1; fi
+    - name: build
+      run: cmake --build build-cross --target resample -j $(nproc)
+    - name: check target
+      run: |
+        arm-none-eabi-readelf -A build-cross/third_party/resample/libresample.a | grep 'Tag_CPU_name: "8-M.MAIN"'
+    - name: build pjlib (libc-only files)
+      # Compile only, nothing links. The files that include pj/sock.h need a
+      # socket API and os_core_unix.c needs pthreads, which an RTOS supplies;
+      # every other file must compile against the C library's headers alone.
+      run: |
+        cmake --build build-cross --target pjlib -j $(nproc) -- -k > pjlib.log 2>&1 || true
+        grep -oE '\*\*\* \[[^]]*src/pj/[a-z_0-9]+\.c\.obj?\]' pjlib.log || true
+        for f in array.c atomic_slist.c config.c ctype.c errno.c except.c fifobuf.c \
+        file_access_unistd.c file_io_ansi.c guid.c guid_simple.c hash.c \
+        list.c lock.c log.c log_writer_stdout.c os_error_unix.c os_info.c \
+        os_time_common.c os_time_unix.c os_timestamp_common.c \
+        os_timestamp_posix.c pool.c pool_buf.c pool_caching.c pool_dbg.c \
+        pool_policy_malloc.c rand.c rbtree.c sock_select.c string.c timer.c \
+        types.c unittest.c; do
+          find build-cross/pjlib -name "$f.o" -o -name "$f.obj" | grep -q . || { echo "$f did not compile"; failed=1; }
+        done
+        test -z "$failed"
+    - name: configure for Cortex-M33 with its FPU
+      # hard-float flags let arm_neon.h compile, so only the probe's own
+      # NEON test keeps the NEON sources out. The cache is seeded with what
+      # an older probe recorded for this target; it must be discarded.
+      run: |
+        cmake -B build-cross-fpu --toolchain cmake/toolchains/arm-none-eabi.cmake \
+          "-DPJ_TARGET_CPU_FLAGS=-mcpu=cortex-m33 -mthumb -mfpu=fpv5-sp-d16 -mfloat-abi=hard" \
+          -DPJ_WITH_CXX=OFF -DPJ_BUILD_APPS=OFF -DBUILD_TESTING=OFF \
+          -DPJLIB_WITH_SSL= -DPJ_SKIP_EXPERIMENTAL_NOTICE=ON \
+          -D_pj_detected_simd_ext:INTERNAL=neon \
+          -D_pj_detected_simd_ext_flags:INTERNAL=-mfpu=neon \
+          -D_simd_supported:INTERNAL=1
+        if grep -e WEBRTC_HAS_NEON -e -mfpu=neon build-cross-fpu/third_party/webrtc/CMakeFiles/webrtc.dir/flags.make; then exit 1; fi
+    - name: configure without bundled dependencies
+      run: |
+        cmake -B build-cross-min --toolchain cmake/toolchains/arm-none-eabi.cmake \
+          -DPJ_WITH_CXX=OFF -DPJ_BUILD_APPS=OFF -DBUILD_TESTING=OFF \
+          -DPJLIB_WITH_SSL= -DPJ_SKIP_EXPERIMENTAL_NOTICE=ON \
+          -DPJ_DEP_G7221=none -DPJ_DEP_GSM=none -DPJ_DEP_ILBC=none \
+          -DPJ_DEP_RESAMPLE=none -DPJ_DEP_SPEEX=none -DPJ_DEP_SRTP=none \
+          -DPJ_DEP_WEBRTC=none -DPJMEDIA_WITH_VIDEO=OFF
 
   # Short pjsua-stress runs under ASan/TSan on every PR / push to master.
   # The full weekly run (larger fleet, longer duration) lives in
   # .github/workflows/stress-test.yml.
   stress-asan:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.any_src == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.any_src == 'true'
     runs-on: ubuntu-latest
     name: stress / asan
     timeout-minutes: 45
@@ -859,7 +1080,7 @@ jobs:
 
   stress-tsan:
     needs: [detect-changes]
-    if: github.event_name == 'push' || needs.detect-changes.outputs.any_src == 'true'
+    if: github.event_name != 'pull_request' || needs.detect-changes.outputs.any_src == 'true'
     runs-on: ubuntu-latest
     name: stress / tsan
     timeout-minutes: 45

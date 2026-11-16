@@ -22,6 +22,7 @@
 #include <pjmedia/errno.h>
 #include <pj/pool.h>
 #include <pj/log.h>
+#include <pj/os.h>
 
 #define THIS_FILE   "conf_test.c"
 
@@ -47,10 +48,8 @@
  * per-slot state survives detach/replace. */
 #define TEST_LEVEL  42
 
-/* Monotonic timestamp for the clock. The bridge uses the caller frame's
- * timestamp as the tick timestamp, so it must advance every tick like a real
- * clock source; a fixed timestamp makes the mixer treat successive ticks as
- * the same one. Static so it stays monotonic across all pump() calls. */
+/* Monotonic timestamp for the clock, advancing every tick like a real clock
+ * source. Static so it stays monotonic across all pump() calls. */
 static pj_uint64_t g_pump_ts;
 
 /* Drive the conference clock so queued (async) operations are processed. */
@@ -576,6 +575,310 @@ on_return:
     return rc;
 }
 
+#if PJMEDIA_CONF_BACKEND != PJMEDIA_CONF_SWITCH_BOARD_BACKEND
+/* Run one bridge tick with the given clock timestamp. */
+static pj_status_t tick_at(pjmedia_port *master, pj_uint64_t ts)
+{
+    pj_int16_t buf[SPF];
+    pjmedia_frame f;
+
+    pj_bzero(&f, sizeof(f));
+    f.type = PJMEDIA_FRAME_TYPE_AUDIO;
+    f.buf = buf;
+    f.size = sizeof(buf);
+    f.timestamp.u64 = ts;
+    return pjmedia_port_get_frame(master, &f);
+}
+
+/*
+ * A new clock source (e.g. a reopened sound or null device) restarts the
+ * frame timestamps from zero. The first frame mixed into a sink under the new
+ * clock may then carry the timestamp of the last frame mixed under the old
+ * one, and must still replace, not add to, the sink's previous mix.
+ */
+static int clock_restart_test(unsigned src_cnt)
+{
+    pj_pool_t *pool = NULL;
+    pjmedia_conf *conf = NULL;
+    pjmedia_port *master;
+    test_port *src[2], *sink;
+    unsigned slot_src[2], slot_sink, i;
+    /* tp_get_frame() fills the frame with 0x01 bytes */
+    const pj_int32_t expected = 0x0101 * (pj_int32_t)src_cnt;
+    int rc = 0;
+    pj_status_t status;
+
+    PJ_LOG(3, (THIS_FILE, "  conf clock restart with %u transmitter(s)",
+               src_cnt));
+
+    pool = pj_pool_create(mem, "conf_clk", 4000, 4000, NULL);
+    if (!pool) return -600;
+
+    status = pjmedia_conf_create(pool, 8, CLOCK_RATE, CHANNELS, SPF, BPS,
+                                 PJMEDIA_CONF_NO_DEVICE, &conf);
+    if (status != PJ_SUCCESS) { rc = -601; goto on_return; }
+    master = pjmedia_conf_get_master_port(conf);
+
+    sink = create_test_port(pool, CLOCK_RATE, SPF, PJ_TRUE);
+    if (!sink) { rc = -602; goto on_return; }
+    status = pjmedia_conf_add_port(conf, pool, &sink->base, NULL, &slot_sink);
+    if (status != PJ_SUCCESS) { rc = -603; goto on_return; }
+    for (i = 0; i < src_cnt; ++i) {
+        src[i] = create_test_port(pool, CLOCK_RATE, SPF, PJ_FALSE);
+        if (!src[i]) { rc = -604; goto on_return; }
+        status = pjmedia_conf_add_port(conf, pool, &src[i]->base, NULL,
+                                       &slot_src[i]);
+        if (status != PJ_SUCCESS) { rc = -605; goto on_return; }
+    }
+
+    /* Old clock: connect, mix once at SPF, then disconnect */
+    for (i = 0; i < src_cnt; ++i) {
+        status = pjmedia_conf_connect_port(conf, slot_src[i], slot_sink, 0);
+        if (status != PJ_SUCCESS) { rc = -606; goto on_return; }
+    }
+    if (tick_at(master, 0) != PJ_SUCCESS) { rc = -607; goto on_return; }
+    for (i = 0; i < src_cnt; ++i) {
+        status = pjmedia_conf_disconnect_port(conf, slot_src[i], slot_sink);
+        if (status != PJ_SUCCESS) { rc = -608; goto on_return; }
+    }
+    if (tick_at(master, SPF) != PJ_SUCCESS ||
+        tick_at(master, 2 * SPF) != PJ_SUCCESS)
+    {
+        rc = -609; goto on_return;
+    }
+
+    /* New clock: timestamps restart, the first mix is again at SPF */
+    for (i = 0; i < src_cnt; ++i) {
+        status = pjmedia_conf_connect_port(conf, slot_src[i], slot_sink, 0);
+        if (status != PJ_SUCCESS) { rc = -610; goto on_return; }
+    }
+    if (tick_at(master, 0) != PJ_SUCCESS) { rc = -611; goto on_return; }
+    sink->put_peak = 0;
+    if (tick_at(master, SPF) != PJ_SUCCESS) { rc = -612; goto on_return; }
+
+    if (sink->put_peak != expected) {
+        PJ_LOG(1, (THIS_FILE, "   sink level %d after clock restart, "
+                   "expected %d", sink->put_peak, expected));
+        rc = -613; goto on_return;
+    }
+
+on_return:
+    if (conf)
+        pjmedia_conf_destroy(conf);
+    if (pool)
+        pj_pool_release(pool);
+    return rc;
+}
+#endif
+
+/*
+ * Verify that a parallel bridge whose worker threads are given a priority
+ * still mixes correctly. Whether the priority is actually applied is platform
+ * and privilege dependent (e.g. on Linux raising it needs CAP_SYS_NICE), so
+ * this only asserts that the bridge keeps delivering frames, which is what a
+ * broken priority setting would take down. On the non-parallel backends the
+ * setting is simply ignored.
+ */
+static int worker_prio_test(void)
+{
+    pj_pool_t *pool = NULL;
+    pjmedia_conf *conf = NULL;
+    pjmedia_conf_param param;
+    pjmedia_port *master;
+    test_port *src, *sink;
+    unsigned slot_src = 0, slot_sink = 0;
+    int rc = 0, prio;
+    pj_status_t status;
+
+    PJ_LOG(3, (THIS_FILE, "  conf worker threads with a priority set"));
+
+    pool = pj_pool_create(mem, "conf_prio", 4000, 4000, NULL);
+    if (!pool) return -400;
+
+    pjmedia_conf_param_default(&param);
+    param.max_slots = 8;
+    param.sampling_rate = CLOCK_RATE;
+    param.channel_count = CHANNELS;
+    param.samples_per_frame = SPF;
+    param.bits_per_sample = BPS;
+    param.options = PJMEDIA_CONF_NO_DEVICE;
+    param.worker_threads = 2;
+
+    /* On an unprivileged POSIX host pj_thread_get_prio_max() reports the
+     * SCHED_OTHER maximum, i.e. zero, which the bridge reads as "leave the
+     * OS default" and the new path would not run at all. Fall back to a
+     * nonzero value so it is still exercised: setting it is expected to fail
+     * there, which must be logged and otherwise harmless.
+     */
+    prio = pj_thread_get_prio_max(pj_thread_this());
+    param.worker_thread_prio = (prio > 0)? prio : 1;
+
+    status = pjmedia_conf_create2(pool, &param, &conf);
+    if (status != PJ_SUCCESS) { rc = -401; goto on_return; }
+    master = pjmedia_conf_get_master_port(conf);
+
+    src  = create_test_port(pool, CLOCK_RATE, SPF, PJ_TRUE);
+    sink = create_test_port(pool, CLOCK_RATE, SPF, PJ_TRUE);
+    if (!src || !sink) { rc = -402; goto on_return; }
+
+    status = pjmedia_conf_add_port(conf, pool, &src->base, NULL, &slot_src);
+    if (status != PJ_SUCCESS) { rc = -403; goto on_return; }
+    status = pjmedia_conf_add_port(conf, pool, &sink->base, NULL, &slot_sink);
+    if (status != PJ_SUCCESS) { rc = -404; goto on_return; }
+    status = pjmedia_conf_connect_port(conf, slot_src, slot_sink, 0);
+    if (status != PJ_SUCCESS) { rc = -405; goto on_return; }
+
+    status = pump(master, 20);
+    if (status != PJ_SUCCESS) { rc = -406; goto on_return; }
+
+    if (sink->put_cnt == 0) {
+        PJ_LOG(1,(THIS_FILE, "   no frame delivered by the worker threads"));
+        rc = -407;
+    }
+
+on_return:
+    if (conf)
+        pjmedia_conf_destroy(conf);
+    if (pool)
+        pj_pool_release(pool);
+    return rc;
+}
+
+
+#if PJMEDIA_CONF_BACKEND != PJMEDIA_CONF_SWITCH_BOARD_BACKEND
+/* The operation callbacks delivered by the bridge, and how many of them
+ * carried the bridge and the user data it was created with.
+ */
+typedef struct op_record
+{
+    pjmedia_conf       *conf;
+    unsigned            count;
+    unsigned            ok_cnt;
+    pjmedia_conf_op_type types[8];
+    pj_status_t         statuses[8];
+} op_record;
+
+static op_record g_ops;
+static int g_op_user_data;
+
+static void record_op(const pjmedia_conf_op_info *info)
+{
+    if (g_ops.count < PJ_ARRAY_SIZE(g_ops.types)) {
+        g_ops.types[g_ops.count] = info->op_type;
+        g_ops.statuses[g_ops.count] = info->status;
+    }
+    if (info->conf == g_ops.conf && info->user_data == &g_op_user_data)
+        ++g_ops.ok_cnt;
+    ++g_ops.count;
+}
+
+static void reset_ops(pjmedia_conf *conf)
+{
+    pj_bzero(&g_ops, sizeof(g_ops));
+    g_ops.conf = conf;
+}
+
+/* Every operation callback carries pjmedia_conf_param::user_data: the
+ * queued operations, the cancelled operations and the synchronous removal
+ * of a port whose add-op is still queued, and the removals on destroy.
+ */
+static int op_user_data_test(void)
+{
+    pj_pool_t *pool = NULL;
+    pjmedia_conf *conf = NULL;
+    pjmedia_conf_param param;
+    pjmedia_port *master, *p1 = NULL, *p2 = NULL;
+    unsigned slot1 = 0, slot2 = 0;
+    int rc = 0;
+    pj_status_t status;
+
+    PJ_LOG(3, (THIS_FILE, "  conf op callback user data"));
+
+    pool = pj_pool_create(mem, "conf_op_ud", 4000, 4000, NULL);
+    if (!pool) return -500;
+
+    pjmedia_conf_param_default(&param);
+    param.max_slots = 8;
+    param.sampling_rate = CLOCK_RATE;
+    param.channel_count = CHANNELS;
+    param.samples_per_frame = SPF;
+    param.bits_per_sample = BPS;
+    param.options = PJMEDIA_CONF_NO_DEVICE;
+    param.user_data = &g_op_user_data;
+    status = pjmedia_conf_create2(pool, &param, &conf);
+    if (status != PJ_SUCCESS) { rc = -501; goto on_return; }
+    status = pjmedia_conf_set_op_cb(conf, &record_op);
+    if (status != PJ_SUCCESS) { rc = -502; goto on_return; }
+    master = pjmedia_conf_get_master_port(conf);
+
+    status = pjmedia_null_port_create(pool, CLOCK_RATE, CHANNELS, SPF, BPS,
+                                      &p1);
+    if (status != PJ_SUCCESS) { rc = -503; goto on_return; }
+    status = pjmedia_null_port_create(pool, CLOCK_RATE, CHANNELS, SPF, BPS,
+                                      &p2);
+    if (status != PJ_SUCCESS) { rc = -504; goto on_return; }
+
+    status = pjmedia_conf_add_port(conf, pool, p1, NULL, &slot1);
+    if (status != PJ_SUCCESS) { rc = -505; goto on_return; }
+    status = pjmedia_conf_add_port(conf, pool, p2, NULL, &slot2);
+    if (status != PJ_SUCCESS) { rc = -506; goto on_return; }
+    status = pjmedia_conf_connect_port(conf, slot1, slot2, 0);
+    if (status != PJ_SUCCESS) { rc = -507; goto on_return; }
+
+    /* No clock tick yet, so removing slot1 cancels its queued add-op and
+     * connect-op, and removes it synchronously.
+     */
+    reset_ops(conf);
+    status = pjmedia_conf_remove_port(conf, slot1);
+    if (status != PJ_SUCCESS) { rc = -510; goto on_return; }
+    if (g_ops.count != 3 ||
+        g_ops.types[0] != PJMEDIA_CONF_OP_ADD_PORT ||
+        g_ops.statuses[0] != PJ_ECANCELLED ||
+        g_ops.types[1] != PJMEDIA_CONF_OP_CONNECT_PORTS ||
+        g_ops.statuses[1] != PJ_ECANCELLED ||
+        g_ops.types[2] != PJMEDIA_CONF_OP_REMOVE_PORT ||
+        g_ops.statuses[2] != PJ_SUCCESS)
+    {
+        PJ_LOG(1, (THIS_FILE, "   sync removal: unexpected %u callbacks",
+                   g_ops.count));
+        rc = -511; goto on_return;
+    }
+    if (g_ops.ok_cnt != g_ops.count) { rc = -512; goto on_return; }
+
+    /* The add-op of slot2 is completed by the clock */
+    reset_ops(conf);
+    status = pump(master, 1);
+    if (status != PJ_SUCCESS) { rc = -520; goto on_return; }
+    if (g_ops.count != 1 ||
+        g_ops.types[0] != PJMEDIA_CONF_OP_ADD_PORT ||
+        g_ops.statuses[0] != PJ_SUCCESS)
+    {
+        PJ_LOG(1, (THIS_FILE, "   queued op: unexpected %u callbacks",
+                   g_ops.count));
+        rc = -521; goto on_return;
+    }
+    if (g_ops.ok_cnt != g_ops.count) { rc = -522; goto on_return; }
+
+    /* Destroying the bridge removes the remaining ports */
+    reset_ops(conf);
+    pjmedia_conf_destroy(conf);
+    conf = NULL;
+    if (g_ops.count == 0) { rc = -525; goto on_return; }
+    if (g_ops.ok_cnt != g_ops.count) { rc = -526; goto on_return; }
+
+on_return:
+    if (rc != 0 && g_ops.ok_cnt != g_ops.count) {
+        PJ_LOG(1, (THIS_FILE, "   only %u of %u callbacks carried the bridge "
+                   "and its user data", g_ops.ok_cnt, g_ops.count));
+    }
+    if (conf)
+        pjmedia_conf_destroy(conf);
+    if (pool)
+        pj_pool_release(pool);
+    return rc;
+}
+#endif
+
 
 int conf_test(void)
 {
@@ -588,6 +891,22 @@ int conf_test(void)
         PJ_LOG(1,(THIS_FILE, "  conf master capture test failed (rc=%d)", rc));
         return rc;
     }
+
+#if PJMEDIA_CONF_BACKEND != PJMEDIA_CONF_SWITCH_BOARD_BACKEND
+    rc = clock_restart_test(1);
+    if (rc == 0)
+        rc = clock_restart_test(2);
+    if (rc != 0) {
+        PJ_LOG(1,(THIS_FILE, "  conf clock restart test failed (rc=%d)", rc));
+        return rc;
+    }
+
+    rc = op_user_data_test();
+    if (rc != 0) {
+        PJ_LOG(1,(THIS_FILE, "  conf op user data test failed (rc=%d)", rc));
+        return rc;
+    }
+#endif
 
     rc = detach_replace_test();
     if (rc == 1) {
@@ -604,6 +923,12 @@ int conf_test(void)
         return 0;   /* unsupported backend - skip */
     if (rc != 0) {
         PJ_LOG(1,(THIS_FILE, "  conf replace flow test failed (rc=%d)", rc));
+        return rc;
+    }
+
+    rc = worker_prio_test();
+    if (rc != 0) {
+        PJ_LOG(1,(THIS_FILE, "  conf worker prio test failed (rc=%d)", rc));
         return rc;
     }
     return 0;

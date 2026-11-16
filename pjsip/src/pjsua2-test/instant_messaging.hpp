@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2025-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,6 +33,8 @@ private:
     DeferredResponse deferredResponse;
 
 public:
+    pjsip_transaction *lastTsx = nullptr;
+
     ReceiverAccount();
     virtual ~ReceiverAccount();
 
@@ -69,8 +71,10 @@ struct TestState {
     bool messageReceived = false;
     bool responseSent = false;
     bool responseReceived = false;
+    pj_status_t responseError = PJ_SUCCESS;
     int responseStatusCode = 0;
     std::string receivedMessage{};
+    std::string receivedContentType{};
     std::string responseReason{};
 };
 
@@ -93,6 +97,8 @@ public:
 
     void immediateResponse();
     void deferredResponse();
+    void longContentType();
+    void deferredResponseAfterTsxEnded();
 private:
     Endpoint ep;
     std::unique_ptr<ReceiverAccount> receiverAcc;

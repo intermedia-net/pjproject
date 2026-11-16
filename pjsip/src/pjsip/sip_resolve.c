@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -27,11 +27,17 @@
 #include <pj/ctype.h>
 #include <pj/log.h>
 #include <pj/pool.h>
+#include <pj/os.h>
 #include <pj/rand.h>
 #include <pj/string.h>
 
 
 #define THIS_FILE   "sip_resolve.c"
+
+/* The longest time a server stays marked as failed, see
+ * pjsip_resolver_set_server_failed().
+ */
+#define MAX_FAILED_DURATION (30 * 24 * 3600)
 
 struct naptr_target
 {
@@ -45,6 +51,7 @@ struct naptr_target
 struct query
 {
     char                    *objname;
+    pjsip_resolver_t        *resolver;
 
     pj_dns_type              query_type;
     void                    *token;
@@ -82,11 +89,21 @@ struct query
 };
 
 
+struct failed_server
+{
+    pj_sockaddr              addr;
+    pj_time_val              expiry;
+};
+
 struct pjsip_resolver_t
 {
     pj_dns_resolver *res;
     pj_grp_lock_t   *grp_lock;
+    unsigned         failed_gen;    /* Times the failed servers were cleared */
     pjsip_ext_resolver *ext_res;
+
+    unsigned                 failed_cnt;
+    struct failed_server     failed[PJSIP_MAX_FAILED_SERVERS];
 };
 
 
@@ -174,6 +191,217 @@ PJ_DEF(pj_dns_resolver*) pjsip_resolver_get_resolver(pjsip_resolver_t *res)
 
 
 /*
+ * Public API to get the external resolver implementation.
+ */
+PJ_DEF(pjsip_ext_resolver*) pjsip_resolver_get_ext_resolver(
+                                                pjsip_resolver_t *res)
+{
+    return res->ext_res;
+}
+
+
+/* Find a failed server entry. Must be called with the group lock held. */
+static int find_failed(pjsip_resolver_t *resolver, const pj_sockaddr_t *addr)
+{
+    unsigned i;
+
+    for (i = 0; i < resolver->failed_cnt; ++i) {
+        if (pj_sockaddr_cmp(&resolver->failed[i].addr, addr) == 0)
+            return (int)i;
+    }
+    return -1;
+}
+
+/* Remove the expired failed server entries. Must be called with the group
+ * lock held.
+ */
+static void expire_failed(pjsip_resolver_t *resolver)
+{
+    pj_time_val now;
+    unsigned i = 0;
+
+    pj_gettickcount(&now);
+    while (i < resolver->failed_cnt) {
+        if (PJ_TIME_VAL_GTE(now, resolver->failed[i].expiry)) {
+            resolver->failed[i] = resolver->failed[--resolver->failed_cnt];
+        } else {
+            ++i;
+        }
+    }
+}
+
+/* Set or clear a failed server address. With a generation, only if the
+ * failed servers were not cleared since the request that failed was sent,
+ * e.g: the network has not changed.
+ */
+static pj_status_t set_server_failed(pjsip_resolver_t *resolver,
+                                     const pj_sockaddr_t *addr,
+                                     unsigned duration, const unsigned *gen)
+{
+    int idx;
+
+    PJ_ASSERT_RETURN(resolver && addr, PJ_EINVAL);
+
+    /* The endpoint may be being destroyed */
+    if (!resolver->grp_lock)
+        return PJ_EINVALIDOP;
+
+    pj_grp_lock_acquire(resolver->grp_lock);
+
+    if (gen && *gen != resolver->failed_gen) {
+        pj_grp_lock_release(resolver->grp_lock);
+        return PJ_EIGNORED;
+    }
+
+    expire_failed(resolver);
+    idx = find_failed(resolver, addr);
+
+    if (duration == 0) {
+        if (idx >= 0)
+            resolver->failed[idx] = resolver->failed[--resolver->failed_cnt];
+    } else {
+        struct failed_server *fs;
+
+        if (idx >= 0) {
+            fs = &resolver->failed[idx];
+        } else if (resolver->failed_cnt < PJSIP_MAX_FAILED_SERVERS) {
+            fs = &resolver->failed[resolver->failed_cnt++];
+        } else {
+            unsigned i, oldest = 0;
+
+            /* Replace the entry that would expire first */
+            for (i = 1; i < resolver->failed_cnt; ++i) {
+                if (PJ_TIME_VAL_LT(resolver->failed[i].expiry,
+                                   resolver->failed[oldest].expiry))
+                {
+                    oldest = i;
+                }
+            }
+            fs = &resolver->failed[oldest];
+        }
+
+        if (duration > MAX_FAILED_DURATION)
+            duration = MAX_FAILED_DURATION;
+        pj_sockaddr_cp(&fs->addr, addr);
+        pj_gettickcount(&fs->expiry);
+        fs->expiry.sec += duration;
+    }
+
+    pj_grp_lock_release(resolver->grp_lock);
+    return PJ_SUCCESS;
+}
+
+/* Internal: how many times the failed servers were cleared */
+unsigned pjsip_resolver_failed_servers_gen(pjsip_resolver_t *resolver)
+{
+    unsigned gen;
+
+    if (!resolver->grp_lock)
+        return 0;
+    pj_grp_lock_acquire(resolver->grp_lock);
+    gen = resolver->failed_gen;
+    pj_grp_lock_release(resolver->grp_lock);
+    return gen;
+}
+
+/* Internal, used by the stateful send */
+pj_status_t pjsip_resolver_set_server_failed_gen(pjsip_resolver_t *resolver,
+                                                 const pj_sockaddr_t *addr,
+                                                 unsigned duration,
+                                                 unsigned gen)
+{
+    return set_server_failed(resolver, addr, duration, &gen);
+}
+
+/*
+ * Public API to set or clear a failed server address.
+ */
+PJ_DEF(pj_status_t) pjsip_resolver_set_server_failed(
+                                            pjsip_resolver_t *resolver,
+                                            const pj_sockaddr_t *addr,
+                                            unsigned duration)
+{
+    return set_server_failed(resolver, addr, duration, NULL);
+}
+
+/*
+ * Public API to check whether a server address has failed.
+ */
+PJ_DEF(pj_bool_t) pjsip_resolver_is_server_failed(pjsip_resolver_t *resolver,
+                                                  const pj_sockaddr_t *addr)
+{
+    pj_bool_t failed;
+
+    PJ_ASSERT_RETURN(resolver && addr, PJ_FALSE);
+
+    if (!resolver->grp_lock)
+        return PJ_FALSE;
+
+    pj_grp_lock_acquire(resolver->grp_lock);
+    expire_failed(resolver);
+    failed = find_failed(resolver, addr) >= 0;
+    pj_grp_lock_release(resolver->grp_lock);
+
+    return failed;
+}
+
+/*
+ * Public API to forget all failed server addresses.
+ */
+PJ_DEF(pj_status_t) pjsip_resolver_clear_failed_servers(
+                                            pjsip_resolver_t *resolver)
+{
+    PJ_ASSERT_RETURN(resolver, PJ_EINVAL);
+
+    if (!resolver->grp_lock)
+        return PJ_EINVALIDOP;
+
+    pj_grp_lock_acquire(resolver->grp_lock);
+    resolver->failed_cnt = 0;
+    ++resolver->failed_gen;
+    pj_grp_lock_release(resolver->grp_lock);
+    return PJ_SUCCESS;
+}
+
+/* List the failed servers after the others, keeping the order otherwise */
+static void demote_failed_servers(pjsip_resolver_t *resolver,
+                                  pjsip_server_addresses *server)
+{
+    pjsip_server_addresses sorted;
+    unsigned i, pass;
+
+    if (server->count < 2 || !resolver->grp_lock ||
+        !pjsip_cfg()->endpt.server_failover)
+    {
+        return;
+    }
+
+    pj_grp_lock_acquire(resolver->grp_lock);
+
+    expire_failed(resolver);
+    if (resolver->failed_cnt == 0) {
+        pj_grp_lock_release(resolver->grp_lock);
+        return;
+    }
+
+    sorted.count = 0;
+    for (pass = 0; pass < 2; ++pass) {
+        for (i = 0; i < server->count; ++i) {
+            pj_bool_t is_failed = find_failed(resolver,
+                                              &server->entry[i].addr) >= 0;
+            if (is_failed == (pass == 1))
+                sorted.entry[sorted.count++] = server->entry[i];
+        }
+    }
+
+    pj_grp_lock_release(resolver->grp_lock);
+
+    pj_memcpy(server->entry, sorted.entry,
+              server->count * sizeof(server->entry[0]));
+}
+
+
+/*
  * Public API to create destroy the resolver
  */
 PJ_DEF(void) pjsip_resolver_destroy(pjsip_resolver_t *resolver)
@@ -240,6 +468,9 @@ static void report_result(struct query *query)
 {
     pj_status_t status = get_result_status(query);
 
+    if (status == PJ_SUCCESS)
+        demote_failed_servers(query->resolver, &query->server);
+
     (*query->cb)(status, query->token,
                  status == PJ_SUCCESS? &query->server: NULL);
 }
@@ -274,6 +505,44 @@ static int get_ip_addr_ver(const pj_str_t *host)
 
 
 /*
+ * Internal:
+ * determine if an IPv6 address is an IPv4-mapped address
+ * (::ffff:x.x.x.x).
+ */
+static pj_bool_t is_ipv4_mapped(const pj_in6_addr *a)
+{
+    static const pj_uint8_t prefix[12] =
+        {0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+    return pj_memcmp(a->s6_addr, prefix, sizeof(prefix)) == 0;
+}
+
+
+/* The addresses from the external resolver, with the failed servers last
+ * as from the other resolvers.
+ */
+struct ext_query
+{
+    pjsip_resolver_t          *resolver;
+    void                      *token;
+    pjsip_resolver_callback   *cb;
+};
+
+static void ext_resolver_cb(pj_status_t status, void *token,
+                            const struct pjsip_server_addresses *addr)
+{
+    struct ext_query *ext = (struct ext_query*)token;
+
+    if (status == PJ_SUCCESS && addr && addr->count > 1) {
+        pjsip_server_addresses sorted = *addr;
+        demote_failed_servers(ext->resolver, &sorted);
+        (*ext->cb)(status, ext->token, &sorted);
+    } else {
+        (*ext->cb)(status, ext->token, addr);
+    }
+}
+
+
+/*
  * This is the main function for performing server resolution.
  */
 PJ_DEF(void) pjsip_resolve( pjsip_resolver_t *resolver,
@@ -289,12 +558,21 @@ PJ_DEF(void) pjsip_resolve( pjsip_resolver_t *resolver,
     pj_bool_t report;
     pjsip_transport_type_e type = target->type;
     int af = pj_AF_UNSPEC();
+    pj_dns_resolver *dns_res;
 
     /* If an external implementation has been provided use it instead */
     if (resolver->ext_res) {
-        (*resolver->ext_res->resolve)(resolver, pool, target, token, cb);
+        struct ext_query *ext = PJ_POOL_ALLOC_T(pool, struct ext_query);
+        ext->resolver = resolver;
+        ext->token = token;
+        ext->cb = cb;
+        (*resolver->ext_res->resolve)(resolver, pool, target, ext,
+                                      &ext_resolver_cb);
         return;
     }
+
+    /* Read once, the DNS resolver may be replaced by another thread */
+    dns_res = resolver->res;
 
     /* Is it IP address or hostname? And if it's an IP, which version? */
     ip_addr_ver = get_ip_addr_ver(&target->addr.host);
@@ -355,7 +633,7 @@ PJ_DEF(void) pjsip_resolve( pjsip_resolver_t *resolver,
     /* If target is an IP address, or if resolver is not configured, 
      * we can just finish the resolution now using pj_gethostbyname()
      */
-    if (ip_addr_ver || resolver->res == NULL) {
+    if (ip_addr_ver || dns_res == NULL) {
         char addr_str[PJ_INET6_ADDRSTRLEN+10];
         pj_uint16_t srv_port;
         unsigned i;
@@ -372,8 +650,12 @@ PJ_DEF(void) pjsip_resolve( pjsip_resolver_t *resolver,
 
                     status2 = pj_getaddrinfo(pj_AF_INET6(),
                                             &target->addr.host, &count, ai);
+                    /* A v4-mapped result means no NAT64 synthesis
+                     * occurred; use plain IPv4 instead.
+                     */
                     if (status2 == PJ_SUCCESS && count > 0 &&
-                        ai[0].ai_addr.addr.sa_family == pj_AF_INET6())
+                        ai[0].ai_addr.addr.sa_family == pj_AF_INET6() &&
+                        !is_ipv4_mapped(&ai[0].ai_addr.ipv6.sin6_addr))
                     {
                         pj_sockaddr_init(pj_AF_INET6(),
                                          &svr_addr.entry[0].addr,
@@ -468,6 +750,9 @@ PJ_DEF(void) pjsip_resolve( pjsip_resolver_t *resolver,
                                 pj_sockaddr_get_len(&svr_addr.entry[i].addr);
         }
 
+        if (status == PJ_SUCCESS)
+            demote_failed_servers(resolver, &svr_addr);
+
         /* Call the callback. */
         (*cb)(status, token, &svr_addr);
 
@@ -483,6 +768,7 @@ PJ_DEF(void) pjsip_resolve( pjsip_resolver_t *resolver,
     query->objname = THIS_FILE;
     query->token = token;
     query->cb = cb;
+    query->resolver = resolver;
     query->grp_lock = resolver->grp_lock;
     query->req.target = *target;
     pj_strdup(pool, &query->req.target.addr.host, &target->addr.host);
@@ -574,7 +860,7 @@ PJ_DEF(void) pjsip_resolve( pjsip_resolver_t *resolver,
         ++query->pending_cnt;
         status = pj_dns_srv_resolve(&query->naptr[0].name,
                                     &query->naptr[0].res_type,
-                                    query->req.def_port, pool, resolver->res,
+                                    query->req.def_port, pool, dns_res,
                                     opt, query, &srv_resolver_cb, NULL);
         if (status != PJ_SUCCESS)
             --query->pending_cnt;
@@ -584,7 +870,7 @@ PJ_DEF(void) pjsip_resolve( pjsip_resolver_t *resolver,
         /* Resolve DNS A record if address family is not fixed to IPv6 */
         if (af != pj_AF_INET6()) {
             ++query->pending_cnt;
-            status = pj_dns_resolver_start_query(resolver->res,
+            status = pj_dns_resolver_start_query(dns_res,
                                                  &query->naptr[0].name,
                                                  PJ_DNS_TYPE_A, 0,
                                                  &dns_a_callback,
@@ -596,7 +882,7 @@ PJ_DEF(void) pjsip_resolve( pjsip_resolver_t *resolver,
         /* Resolve DNS AAAA record if address family is not fixed to IPv4 */
         if (af != pj_AF_INET() && status == PJ_SUCCESS) {
             ++query->pending_cnt;
-            status = pj_dns_resolver_start_query(resolver->res,
+            status = pj_dns_resolver_start_query(dns_res,
                                                  &query->naptr[0].name,
                                                  PJ_DNS_TYPE_AAAA, 0,
                                                  &dns_aaaa_callback,

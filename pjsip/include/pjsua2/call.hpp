@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2013 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2012-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -221,6 +221,11 @@ struct SdpSession
     void   *pjSdpSession;
 
 public:
+    /**
+     * Default constructor
+     */
+    SdpSession() : pjSdpSession(nullptr) {}
+
     /**
      * Convert from pjsip
      */
@@ -834,6 +839,36 @@ struct OnCallSdpCreatedParam
 };
 
 /**
+ * This structure contains parameters for Call::onCallSendAck() callback.
+ */
+struct OnCallSendAckParam
+{
+    /**
+     * The 2xx response for INVITE that triggered the need to send an ACK
+     * request.
+     */
+    SipRxData rdata;
+
+    /**
+     * Output: application sets this to true if it has sent (or will send)
+     * the ACK itself, to suppress the automatic ACK sending. Default is false,
+     * i.e. the library sends the ACK after this callback returns.
+     */
+    bool suppressSendAck;
+
+    /**
+     * The CSeq of the 2xx response.
+     */
+    pj_int32_t cseq;
+
+    /**
+     * Default constructor
+     */
+    OnCallSendAckParam() : suppressSendAck(false), cseq(-1)
+    {}
+};
+
+/**
  * This structure contains parameters for Call::onStreamPreCreate()
  * callback.
  */
@@ -1153,6 +1188,15 @@ struct OnCallRxOfferParam
      * The new offer received.
      */
     SdpSession          offer;
+
+    /**
+     * SDP answer for application-managed calls only
+     * (PJSUA_CALL_MEDIA_APP_MANAGED). Set #SdpSession::wholeSdp to answer
+     * the offer synchronously. Leave empty for ordinary calls, which use
+     * pjsua's generated answer. On ordinary calls this field is ignored
+     * with a warning.
+     */
+    SdpSession          answer;
     
     /**
      * Status code to be returned for answering the offer. On input,
@@ -1174,7 +1218,9 @@ struct OnCallRxOfferParam
 struct OnCallRxReinviteParam
 {
     /**
-     * The new offer received.
+     * The new offer received. For a re-INVITE without SDP on an
+     * application-managed call or when UaConfig::notifyOfferlessReinvite
+     * is enabled, #SdpSession::wholeSdp is empty.
      */
     SdpSession          offer;
 
@@ -1191,8 +1237,11 @@ struct OnCallRxReinviteParam
     
     /**
      * Status code to be returned for answering the offer. On input,
-     * it contains status code PJSIP_SC_OK (200). Currently, valid values are only
-     * PJSIP_SC_OK (200) and PJSIP_SC_NOT_ACCEPTABLE_HERE (488).
+     * it contains status code PJSIP_SC_OK (200). For a re-INVITE containing
+     * SDP, valid values are PJSIP_SC_OK (200) and
+     * PJSIP_SC_NOT_ACCEPTABLE_HERE (488). For a synchronous offerless
+     * re-INVITE, 2xx is treated as 200, 300-699 rejects the request, and
+     * values outside 200-699 are changed to 500.
      */
     pjsip_status_code   statusCode;
     
@@ -1340,9 +1389,9 @@ struct OnCreateMediaTransportSrtpParam
  */
 
 /**
- * This structure contains parameters for Call::answer(), Call::hangup(),
- * Call::reinvite(), Call::update(), Call::xfer(), Call::xferReplaces(),
- * Call::setHold().
+ * This structure contains parameters for Call::makeCall(), Call::answer(),
+ * Call::hangup(), Call::reinvite(), Call::update(), Call::xfer(),
+ * Call::xferReplaces(), Call::setHold().
  */
 struct CallOpParam
 {
@@ -1374,7 +1423,17 @@ struct CallOpParam
     SipTxOption         txOption;
 
     /**
-     * SDP answer. Currently only used for Call::answer().
+     * Local SDP offer or answer to use verbatim instead of pjsua2's own
+     * generated SDP, bypassing the onCallSdpCreated() callback for this
+     * operation. Used by Call::makeCall() and Call::reinvite()/update() as
+     * the SDP offer, and by Call::answer() as the SDP answer or, for an
+     * application-managed call answering an offerless INVITE or re-INVITE,
+     * as the local SDP offer.
+     * Supplying an offer requires mediaAppManaged to be enabled for the
+     * account or call.
+     * For ordinary calls, leave empty to let pjsua2 generate the SDP as
+     * usual. Application-managed initial outgoing calls require an SDP
+     * offer unless PJSUA_CALL_NO_SDP_OFFER is set.
      */
     SdpSession          sdp;
     
@@ -1536,7 +1595,11 @@ public:
     Call(Account& acc, int call_id = PJSUA_INVALID_ID);
 
     /**
-     * Destructor.
+     * Destructor. If this object still owns its call, the call stops
+     * reporting to it and is hung up, later if the call is busy at the
+     * moment. A call it no longer owns, e.g. a new call that has taken its
+     * call ID, is left alone. Unless the library is being or has been
+     * destroyed, the media objects returned by getMedia() are freed.
      */
     virtual ~Call();
 
@@ -1586,7 +1649,10 @@ public:
      *
      * @param med_idx       Media index.
      *
-     * @return              The media or NULL if invalid or inactive.
+     * @return              The media or NULL if invalid or inactive. It is
+     *                      no longer valid after the media is updated,
+     *                      the call is disconnected, or the Call object
+     *                      is deleted.
      */
     Media *getMedia(unsigned med_idx) const;
 
@@ -1742,6 +1808,27 @@ public:
      */
     void hangup(const CallOpParam &prm) PJSUA2_THROW(Error);
     
+    /**
+     * Create and send an ACK request for the 2xx response, optionally with
+     * an SDP answer \a sdp attached to it. Application would normally call
+     * this from within onCallSendAck(), to manually take over the ACK
+     * transmission, e.g. to attach an SDP answer to the ACK for a late
+     * SDP offer received in the 2xx response.
+     * When called synchronously from onCallSendAck(), this method may only
+     * be used on the Call whose ACK triggered the callback; another Call
+     * fails with PJ_EINVALIDOP.
+     *
+     * @param cseq      CSeq of the 2xx response that triggered the need to
+     *                  send an ACK request; normally this is the CSeq of
+     *                  the \a rdata received in the onCallSendAck()
+     *                  callback.
+     * @param sdp       Optional SDP answer to be attached to the ACK
+     *                  request. If its wholeSdp is empty, no SDP body
+     *                  will be attached.
+     */
+    void sendAck(int cseq, const SdpSession &sdp = SdpSession())
+                PJSUA2_THROW(Error);
+
     /**
      * Put the specified call on hold. This will send re-INVITE with the
      * appropriate SDP to inform remote that the call is being put on hold.
@@ -2104,6 +2191,22 @@ public:
     { PJ_UNUSED_ARG(prm); }
 
     /**
+     * Notify application when the framework needs to send an ACK request
+     * after it receives an incoming 2xx response for INVITE (e.g. when the
+     * 2xx response carries a late SDP offer). The default implementation
+     * does nothing and lets the framework send the ACK. Application can
+     * set prm.suppressSendAck to true and then the application is responsible
+     * for sending the ACK.
+     *
+     * This callback is enabled only when
+     * UaConfig::enableCallSendAckCallback is set before Endpoint::libInit().
+     *
+     * @param prm       Callback parameter.
+     */
+    virtual void onCallSendAck(OnCallSendAckParam &prm)
+    { PJ_UNUSED_ARG(prm); }
+
+    /**
      * Notify application when an audio media session is about to be created
      * (as opposed to onStreamCreated(), which is called *after* the session
      * has been created). The application may change
@@ -2265,9 +2368,9 @@ public:
      * (i.e. re-INVITE/UPDATE with SDP is received). Application can
      * decide to accept/reject the offer by setting the code (default
      * is PJSIP_SC_OK (200)). If the offer is accepted, application can update
-     * the call setting to be applied in the answer. When this callback is
-     * not implemented, the default behavior is to accept the offer using
-     * current call setting.
+     * the call setting and supply the SDP answer to be applied. When this
+     * callback is not implemented, the default behavior is to accept the
+     * offer using current call setting.
      *
      * @param prm       Callback parameter.
      */
@@ -2275,16 +2378,23 @@ public:
     { PJ_UNUSED_ARG(prm); }
     
     /**
-     * Notify application when call has received a re-INVITE offer from
-     * the peer. It allows more fine-grained control over the response to
-     * a re-INVITE. If application sets prm.isAsync to true, it can send
+     * Notify application when call has received a re-INVITE from the peer.
+     * It allows more fine-grained control over the response to a re-INVITE.
+     * If application sets prm.isAsync to true, it can send
      * the reply manually using the function #pj::Call::answer() and setting
      * the SDP answer. Otherwise, by default the re-INVITE will be
      * answered automatically after the callback returns.
      *
-     * Currently, this callback is only called for re-INVITE with
-     * SDP, but app should be prepared to handle the case of re-INVITE
-     * without SDP.
+     * For a re-INVITE without SDP, this callback is called with an empty
+     * prm.offer only for application-managed calls or when
+     * UaConfig::notifyOfferlessReinvite is enabled. Otherwise, ordinary
+     * calls handle the request automatically without invoking this callback.
+     * By default, the active local SDP is re-offered. Application may set
+     * prm.isAsync to true and later call #pj::Call::answer() with its own
+     * local SDP offer.
+     * On the asynchronous path, a successful final response requires an
+     * application-supplied offer; the active local SDP is not automatically
+     * re-offered.
      *
      * Remarks: If manually answering at a later timing, application may
      * need to monitor onCallTsxState() callback to check whether
@@ -2292,8 +2402,8 @@ public:
      * PJSIP_SC_REQUEST_TERMINATED (487) due to being cancelled.
      *
      * Note: onCallRxOffer() will still be called after this callback,
-     * but only if prm.isAsync is false and prm.statusCode is PJSIP_SC_OK
-     * (200).
+     * but only if the re-INVITE contains SDP, prm.isAsync is false and
+     * prm.statusCode is PJSIP_SC_OK (200).
      *
      * Answering manually also allows application to accept media that
      * the library does not manage (e.g. T.38 image/udptl), by answering
@@ -2465,6 +2575,12 @@ private:
     Token                userData;
     std::vector<Media *> medias;
     Call                *child;     /* New outgoing call in call transfer.  */
+    /* Values returned to pjsua from callbacks, kept valid after them. */
+    string               tmpReason;
+    CallSetting          tmpOpt;
+    SrtpCryptoVector     tmpCryptos;
+
+    void clearMedias();
 };
 
 /**
@@ -2474,4 +2590,3 @@ private:
 } // namespace pj
 
 #endif  /* __PJSUA2_CALL_HPP__ */
-

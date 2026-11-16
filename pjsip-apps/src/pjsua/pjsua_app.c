@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -365,11 +365,16 @@ static void on_incoming_call(pjsua_acc_id acc_id, pjsua_call_id call_id,
                              pjsip_rx_data *rdata)
 {
     pjsua_call_info call_info;
+    pj_status_t status;
 
     PJ_UNUSED_ARG(acc_id);
     PJ_UNUSED_ARG(rdata);
 
-    pjsua_call_get_info(call_id, &call_info);
+    status = pjsua_call_get_info(call_id, &call_info);
+    if (status != PJ_SUCCESS) {
+        pjsua_perror(THIS_FILE, "Unable to get incoming call info", status);
+        return;
+    }
 
     if (current_call==PJSUA_INVALID_ID)
         current_call = call_id;
@@ -385,13 +390,11 @@ static void on_incoming_call(pjsua_acc_id acc_id, pjsua_call_id call_id,
     if (app_config.auto_answer > 0) {
         pjsua_call_setting opt;
 
-        pjsua_call_setting_default(&opt);
-        opt.aud_cnt = app_config.aud_cnt;
-        opt.vid_cnt = app_config.vid.vid_cnt;
-        opt.txt_cnt = app_config.txt_cnt;
+        app_config_init_call_setting(&opt);
 
-        pjsua_call_answer2(call_id, &opt, app_config.auto_answer, NULL,
-                           NULL);
+        status = app_answer_call(call_id, &opt, app_config.auto_answer, NULL);
+        if (status != PJ_SUCCESS)
+            pjsua_perror(THIS_FILE, "Unable to auto-answer call", status);
     }
     
     if (app_config.auto_answer < 200) {
@@ -1302,7 +1305,6 @@ static void on_call_sdp_created_cb(pjsua_call_id call_id,
                                    const pjmedia_sdp_session *rem_sdp)
 {
     pjmedia_sdp_session *custom = NULL;
-    pj_str_t sdp_str;
     pj_status_t status;
 
     PJ_UNUSED_ARG(call_id);
@@ -1311,16 +1313,7 @@ static void on_call_sdp_created_cb(pjsua_call_id call_id,
     if (app_config.custom_sdp.slen == 0)
         return;
 
-    /* Make a writable copy since pjmedia_sdp_parse modifies the buffer */
-    sdp_str.ptr = (char*)pj_pool_alloc(pool,
-                                       (pj_size_t)(app_config.custom_sdp.slen + 1));
-    pj_memcpy(sdp_str.ptr, app_config.custom_sdp.ptr,
-              (pj_size_t)app_config.custom_sdp.slen);
-    sdp_str.ptr[app_config.custom_sdp.slen] = '\0';
-    sdp_str.slen = app_config.custom_sdp.slen;
-
-    status = pjmedia_sdp_parse(pool, sdp_str.ptr, (pj_size_t)sdp_str.slen,
-                               &custom);
+    status = app_parse_custom_sdp(pool, &custom);
     if (status != PJ_SUCCESS) {
         PJ_PERROR(1,(THIS_FILE, status,
                      "Failed to parse custom SDP, using generated SDP"));
@@ -1973,6 +1966,7 @@ static pj_status_t app_init(void)
             pjsua_acc_get_config(aid, tmp_pool, &acc_cfg);
 
             app_config_init_video(&acc_cfg);
+            app_config_apply_acc_setting(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
             acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
@@ -2001,9 +1995,7 @@ static pj_status_t app_init(void)
         pjsua_transport_config udp_cfg;
 
         udp_cfg = app_config.udp_cfg;
-        if (udp_cfg.port == 0)
-            udp_cfg.port = 5060;
-        else
+        if (udp_cfg.port != 0)
             udp_cfg.port += 10;
         status = pjsua_transport_create(type,
                                         &udp_cfg,
@@ -2020,6 +2012,7 @@ static pj_status_t app_init(void)
             pjsua_acc_get_config(aid, tmp_pool, &acc_cfg);
 
             app_config_init_video(&acc_cfg);
+            app_config_apply_acc_setting(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
             acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
@@ -2058,6 +2051,7 @@ static pj_status_t app_init(void)
             pjsua_acc_get_config(aid, tmp_pool, &acc_cfg);
 
             app_config_init_video(&acc_cfg);
+            app_config_apply_acc_setting(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
             acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
@@ -2074,7 +2068,9 @@ static pj_status_t app_init(void)
         pjsua_acc_id aid;
         pjsip_transport_type_e type = PJSIP_TRANSPORT_TCP6;
 
-        tcp_cfg.port += 10;
+        if (tcp_cfg.port != 0) {
+            tcp_cfg.port += 10;
+        }
 
         status = pjsua_transport_create(type,
                                         &tcp_cfg,
@@ -2091,6 +2087,7 @@ static pj_status_t app_init(void)
             pjsua_acc_get_config(aid, tmp_pool, &acc_cfg);
 
             app_config_init_video(&acc_cfg);
+            app_config_apply_acc_setting(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
             acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
@@ -2116,11 +2113,15 @@ static pj_status_t app_init(void)
                   sizeof(tcp_cfg.qos_params));
 
         /* Set TLS port as TCP port+1 */
-        tcp_cfg.port++;
+        if (tcp_cfg.port != 0) {
+            tcp_cfg.port++;
+        }
         status = pjsua_transport_create(PJSIP_TRANSPORT_TLS,
                                         &tcp_cfg, 
                                         &transport_id);
-        tcp_cfg.port--;
+        if (tcp_cfg.port != 0) {
+            tcp_cfg.port--;
+        }
         if (status != PJ_SUCCESS)
             goto on_error;
         
@@ -2133,6 +2134,7 @@ static pj_status_t app_init(void)
             pjsua_acc_get_config(acc_id, tmp_pool, &acc_cfg);
 
             app_config_init_video(&acc_cfg);
+            app_config_apply_acc_setting(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
             acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
@@ -2148,7 +2150,9 @@ static pj_status_t app_init(void)
         pjsua_acc_id aid;
         pjsip_transport_type_e type = PJSIP_TRANSPORT_TLS6;
 
-        tcp_cfg.port += 10;
+        if (tcp_cfg.port != 0) {
+            tcp_cfg.port += 10;
+        }
 
         status = pjsua_transport_create(type,
                                         &tcp_cfg,
@@ -2165,6 +2169,7 @@ static pj_status_t app_init(void)
             pjsua_acc_get_config(aid, tmp_pool, &acc_cfg);
 
             app_config_init_video(&acc_cfg);
+            app_config_apply_acc_setting(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
             acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
@@ -2189,11 +2194,18 @@ static pj_status_t app_init(void)
     /* Add accounts */
     for (i=0; i<app_config.acc_cnt; ++i) {
         app_config.acc_cfg[i].rtp_cfg = app_config.rtp_cfg;
-        app_config.acc_cfg[i].reg_retry_interval = 300;
         app_config.acc_cfg[i].reg_first_retry_interval = 60;
 
         app_config_init_video(&app_config.acc_cfg[i]);
+        app_config_apply_acc_setting(&app_config.acc_cfg[i]);
         app_config.acc_cfg[i].txt_red_level = app_config.txt_red_level;
+        if (app_config.instance_id.slen &&
+            !app_config.acc_cfg[i].rfc5626_instance_id.slen)
+        {
+            app_config.acc_cfg[i].rfc5626_instance_id = app_config.instance_id;
+        }
+        if (app_config.outb_disable)
+            app_config.acc_cfg[i].use_rfc5626 = PJ_FALSE;
 
         status = pjsua_acc_add(&app_config.acc_cfg[i], PJ_TRUE, NULL);
         if (status != PJ_SUCCESS)
@@ -2249,10 +2261,7 @@ static pj_status_t app_init(void)
     }
 
     /* Init call setting */
-    pjsua_call_setting_default(&call_opt);
-    call_opt.aud_cnt = app_config.aud_cnt;
-    call_opt.vid_cnt = app_config.vid.vid_cnt;
-    call_opt.txt_cnt = app_config.txt_cnt;
+    app_config_init_call_setting(&call_opt);
     if (app_config.enable_loam) {
         call_opt.flag |= PJSUA_CALL_NO_SDP_OFFER;
     }
@@ -2324,12 +2333,9 @@ pj_status_t pjsua_app_run(pj_bool_t wait_telnet_cli)
 
     /* If user specifies URI to call, then call the URI */
     if (uri_arg.slen) {
-        pjsua_call_setting_default(&call_opt);
-        call_opt.aud_cnt = app_config.aud_cnt;
-        call_opt.vid_cnt = app_config.vid.vid_cnt;
-        call_opt.txt_cnt = app_config.txt_cnt;
+        app_config_init_call_setting(&call_opt);
 
-        status = pjsua_call_make_call(current_acc, &uri_arg, &call_opt, NULL,
+        status = app_make_call(current_acc, &uri_arg, &call_opt,
                                       NULL, NULL);
         if (status != PJ_SUCCESS)
             pjsua_perror(THIS_FILE, "Unable to make call", status);

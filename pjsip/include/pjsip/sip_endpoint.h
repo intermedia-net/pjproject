@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -424,6 +424,57 @@ PJ_DECL(pj_status_t) pjsip_endpt_set_ext_resolver(pjsip_endpoint *endpt,
 PJ_DECL(pj_dns_resolver*) pjsip_endpt_get_resolver(pjsip_endpoint *endpt);
 
 /**
+ * Get the external resolver implementation set with
+ * #pjsip_endpt_set_ext_resolver().
+ *
+ * @param endpt         The SIP endpoint instance.
+ *
+ * @return              The external resolver implementation, or NULL when
+ *                      none is set.
+ */
+PJ_DECL(pjsip_ext_resolver*) pjsip_endpt_get_ext_resolver(
+                                                pjsip_endpoint *endpt);
+
+/**
+ * Mark a server address as failed for the specified duration, or clear the
+ * mark. Please see #pjsip_resolver_set_server_failed() for more info.
+ *
+ * @param endpt         The SIP endpoint instance.
+ * @param addr          The server address.
+ * @param duration      Number of seconds to keep the mark, at most 30 days,
+ *                      or zero to clear it.
+ *
+ * @return              PJ_SUCCESS on success.
+ */
+PJ_DECL(pj_status_t) pjsip_endpt_set_server_failed(pjsip_endpoint *endpt,
+                                                   const pj_sockaddr_t *addr,
+                                                   unsigned duration);
+
+/**
+ * Check whether a server address is marked as failed. Please see
+ * #pjsip_resolver_set_server_failed() for more info.
+ *
+ * @param endpt         The SIP endpoint instance.
+ * @param addr          The server address.
+ *
+ * @return              PJ_TRUE if the address is marked as failed.
+ */
+PJ_DECL(pj_bool_t) pjsip_endpt_is_server_failed(pjsip_endpoint *endpt,
+                                                const pj_sockaddr_t *addr);
+
+/**
+ * Clear all failed server marks, including the ones set by the application,
+ * e.g: after the local network has changed. The requests sent before this
+ * are not sent to another server when they fail, and their failures are not
+ * remembered, as they may have been sent on the previous network.
+ *
+ * @param endpt         The SIP endpoint instance.
+ *
+ * @return              PJ_SUCCESS on success.
+ */
+PJ_DECL(pj_status_t) pjsip_endpt_clear_failed_servers(pjsip_endpoint *endpt);
+
+/**
  * Asynchronously resolve a SIP target host or domain according to rule 
  * specified in RFC 3263 (Locating SIP Servers). When the resolving operation
  * has completed, the callback will be called.
@@ -593,7 +644,9 @@ PJ_DECL(pj_bool_t) pjsip_endpt_has_capability( pjsip_endpoint *endpt,
  * @param tags      Array of tags describing the capabilities or extensions
  *                  to be added to the appropriate header.
  *
- * @return          PJ_SUCCESS on success.
+ * @return          PJ_SUCCESS on success, PJ_ETOOMANY if the header has no
+ *                  room for all the tags (none of them is added then), or
+ *                  the appropriate error code on other failures.
  */
 PJ_DECL(pj_status_t) pjsip_endpt_add_capability( pjsip_endpoint *endpt,
                                                  pjsip_module *mod,
@@ -673,6 +726,20 @@ PJ_DECL(void) pjsip_endpt_log_error( pjsip_endpoint *endpt,
  * race with event processing.
  */
 void pjsip_endpt_stop_handle_events(pjsip_endpoint *endpt);
+
+/**
+ * Internal API for the stateful send, see
+ * #pjsip_resolver_failed_servers_gen().
+ */
+unsigned pjsip_endpt_failed_servers_gen(pjsip_endpoint *endpt);
+
+/**
+ * Internal API for the stateful send, see
+ * #pjsip_resolver_set_server_failed_gen().
+ */
+pj_status_t pjsip_endpt_set_server_failed_gen(pjsip_endpoint *endpt,
+                                              const pj_sockaddr_t *addr,
+                                              unsigned duration, unsigned gen);
 
 PJ_END_DECL
 

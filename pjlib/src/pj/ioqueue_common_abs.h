@@ -1,6 +1,6 @@
 /* $Id */
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -25,15 +25,16 @@
  * to the ioqueue. 
  */
 
+#include <pj/assert.h>
+#include <pj/errno.h>
 #include <pj/list.h>
 
 /*
  * The select ioqueue relies on socket functions (pj_sock_xxx()) to return
  * the correct error code.
  */
-#if PJ_RETURN_OS_ERROR(100) != PJ_STATUS_FROM_OS(100)
-#   error "Proper error reporting must be enabled for ioqueue to work!"
-#endif
+PJ_STATIC_ASSERT(PJ_RETURN_OS_ERROR(100) == PJ_STATUS_FROM_OS(100),
+                 os_error_reporting_must_be_enabled);
 
 
 struct generic_operation
@@ -89,6 +90,13 @@ union operation_key
 #endif
 };
 
+#if PJ_HAS_TCP
+#   define CONNECTING_FIELD             \
+        int                 connecting;
+#else
+#   define CONNECTING_FIELD
+#endif
+
 #if PJ_IOQUEUE_HAS_SAFE_UNREG
 #   define UNREG_FIELDS                 \
         unsigned            ref_count;  \
@@ -112,7 +120,7 @@ union operation_key
     int                     fd_type;                \
     void                   *user_data;              \
     pj_ioqueue_callback     cb;                     \
-    int                     connecting;             \
+    CONNECTING_FIELD                                \
     struct read_operation   read_list;              \
     struct write_operation  write_list;             \
     struct accept_operation accept_list;            \

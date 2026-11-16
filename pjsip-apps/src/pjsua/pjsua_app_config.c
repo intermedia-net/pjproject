@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -77,6 +77,7 @@ static void usage(void)
             PJSUA_REG_INTERVAL);
     printf("  --rereg-delay=SEC   Optional auto retry registration interval (default %d)\n",
             PJSUA_REG_RETRY_INTERVAL);
+    puts  ("                      0 disables auto re-registration");
     puts  ("  --reg-use-proxy=N   Control the use of proxy settings in REGISTER.");
     puts  ("                      0=no proxy, 1=outbound only, 2=acc only, 3=all (default)");
     puts  ("  --server-affinity[=on|off]  Pin same SIP server across requests");
@@ -96,8 +97,17 @@ static void usage(void)
             PJSIP_SESS_TIMER_DEF_SE);
     puts  ("  --timer-min-se=N    Session timers minimum expiration period, in secs (def:90)");
     puts  ("  --outb-rid=string   Set SIP outbound reg-id (default:1)");
+    puts  ("  --instance-id=URN   Set the SIP instance ID of all accounts, e.g.");
+    puts  ("                      \"<urn:uuid:00000000-0000-1000-8000-AABBCCDDEEFF>\"");
+    puts  ("  --outb-disable      Disable SIP outbound (RFC 5626) for all accounts");
     puts  ("  --auto-update-nat=N Enable/disable SIP traversal behind symmetric NAT (def: 1)");
     puts  ("                      0: disabled, 1:enabled with exception, 2: fully enabled");
+    puts  ("  --contact-rewrite-method=N  Contact rewrite method, a sum of:");
+    puts  ("                      1: unregister, then register anew");
+    puts  ("                      2: replace it in the same registration");
+    puts  ("                      4: also on non-2xx responses, with 1 or 2");
+    printf("                      (default: %d)\n",
+            PJSUA_CONTACT_REWRITE_METHOD);
     puts  ("  --disable-stun      Disable STUN for this account");
     puts  ("  --next-cred         Add another credentials");
     puts  ("");
@@ -120,6 +130,9 @@ static void usage(void)
     puts  ("  --no-udp            Disable UDP transport.");
     puts  ("  --nameserver=NS     Add the specified nameserver to enable SRV resolution");
     puts  ("                      This option can be specified multiple times.");
+    puts  ("  --server-failover   Remember failed servers, try the others first");
+    puts  ("  --resolver-fallback Resolve with the system resolver while no");
+    puts  ("                      nameserver answers");
     puts  ("  --outbound=url      Set the URL of global outbound proxy server");
     puts  ("                      May be specified multiple times");
     puts  ("  --stun-srv=FORMAT   Set STUN server host or domain. This option may be");
@@ -187,6 +200,13 @@ static void usage(void)
 #if !PJSUA_MEDIA_HAS_PJMEDIA
     puts  ("  --custom-sdp=STR    Replace generated SDP with this string.");
     puts  ("                      Use \\r\\n or \\n as line separators. The full SDP is replaced as-is.");
+    puts  ("  --sdp-passthrough  Keep and forward the local/remote SDP as-is during");
+    puts  ("                     negotiation for outgoing and incoming calls.");
+    puts  ("  --acc-media-app-managed  Treat all media on incoming and outgoing calls");
+    puts  ("                     for this account as application-managed from the start,");
+    puts  ("                     so pjsua never creates a media transport for them (even");
+    puts  ("                     the initial incoming offer). See pjsua_acc_config.");
+    puts  ("  --dummy-codecs      Register dummy codecs for the alternative media backend.");
 #endif
 
 #if PJSUA_HAS_VIDEO
@@ -242,6 +262,7 @@ static void usage(void)
     puts  ("  --turn-tls-neg-timeout Specify TURN TLS negotiation timeout (default=no)");
     puts  ("  --turn-tls-cipher   Specify preferred TURN TLS cipher (optional).");
     puts  ("                      May be specified multiple times");
+    puts  ("  --turn-tls-verify-server  Verify TURN server TLS certificate (default=no)");
 #endif
     puts  ("");
     puts  ("Buddy List (can be more than one):");
@@ -406,6 +427,7 @@ static pj_status_t parse_args(int argc, char *argv[],
            OPT_100REL, OPT_USE_IMS, OPT_REALM, OPT_USERNAME, OPT_PASSWORD, OPT_AKA_OP, OPT_AKA_AMF,
            OPT_REG_RETRY_INTERVAL, OPT_REG_USE_PROXY,
            OPT_MWI, OPT_NAMESERVER, OPT_STUN_SRV, OPT_UPNP, OPT_OUTB_RID,
+           OPT_INSTANCE_ID, OPT_OUTB_DISABLE,
            OPT_ADD_BUDDY, OPT_OFFER_X_MS_MSG, OPT_NO_PRESENCE,
            OPT_AUTO_ANSWER, OPT_AUTO_PLAY, OPT_AUTO_PLAY_HANGUP, OPT_AUTO_LOOP,
            OPT_AUTO_CONF, OPT_CLOCK_RATE, OPT_SND_CLOCK_RATE, OPT_STEREO,
@@ -415,6 +437,7 @@ static pj_status_t parse_args(int argc, char *argv[],
            OPT_TURN_TCP, OPT_TURN_USER, OPT_TURN_PASSWD, OPT_TURN_TLS, 
            OPT_TURN_TLS_CA_FILE, OPT_TURN_TLS_CERT_FILE, 
            OPT_TURN_TLS_NEG_TIMEOUT, OPT_TURN_TLS_CIPHER,
+           OPT_TURN_TLS_VERIFY_SERVER,
            OPT_TURN_TLS_PRIV_FILE, OPT_TURN_TLS_PASSWORD,
            OPT_RTCP_MUX, OPT_RTCP_XR, OPT_SRTP_KEYING,
            OPT_PLAY_FILE, OPT_PLAY_TONE, OPT_RTP_PORT, OPT_ADD_CODEC,
@@ -435,15 +458,17 @@ static pj_status_t parse_args(int argc, char *argv[],
            OPT_STDOUT_NO_BUF,
 #endif
            OPT_AUTO_UPDATE_NAT,OPT_USE_COMPACT_FORM,OPT_DIS_CODEC,
+           OPT_CONTACT_REWRITE_METHOD,
            OPT_DISABLE_STUN, OPT_NO_FORCE_LR,
            OPT_TIMER, OPT_TIMER_SE, OPT_TIMER_MIN_SE,
            OPT_VIDEO, OPT_TEXT, OPT_TEXT_RED, OPT_EXTRA_AUDIO,
            OPT_VCAPTURE_DEV, OPT_VRENDER_DEV, OPT_PLAY_AVI, OPT_AUTO_PLAY_AVI,
            OPT_REC_AVI, OPT_REC_AVI_SIZE, OPT_REC_AVI_AUDIO, OPT_AUTO_REC_AVI,
            OPT_USE_CLI, OPT_CLI_TELNET_PORT, OPT_DISABLE_CLI_CONSOLE,
-           OPT_SERVER_AFFINITY
+           OPT_SERVER_AFFINITY, OPT_SERVER_FAILOVER, OPT_RESOLVER_FALLBACK
 #if !PJSUA_MEDIA_HAS_PJMEDIA
-           , OPT_CUSTOM_SDP
+           , OPT_CUSTOM_SDP, OPT_SDP_PASSTHROUGH, OPT_ACC_MEDIA_APP_MANAGED,
+           OPT_DUMMY_CODECS
 #endif
     };
     struct pj_getopt_option long_options[] = {
@@ -485,6 +510,7 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "reg-contact-params",1,0, OPT_REG_CONTACT_PARAMS},
         { "reg-contact-uri-params",1,0, OPT_REG_CONTACT_URI_PARAMS},
         { "auto-update-nat",    1, 0, OPT_AUTO_UPDATE_NAT},
+        { "contact-rewrite-method", 1, 0, OPT_CONTACT_REWRITE_METHOD},
         { "disable-stun",0,0, OPT_DISABLE_STUN},
         { "use-compact-form",   0, 0, OPT_USE_COMPACT_FORM},
         { "accept-redirect", 1, 0, OPT_ACCEPT_REDIRECT},
@@ -499,6 +525,8 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "rereg-delay",1, 0, OPT_REG_RETRY_INTERVAL},
         { "reg-use-proxy", 1, 0, OPT_REG_USE_PROXY},
         { "nameserver", 1, 0, OPT_NAMESERVER},
+        { "server-failover", 0, 0, OPT_SERVER_FAILOVER},
+        { "resolver-fallback", 0, 0, OPT_RESOLVER_FALLBACK},
         { "stun-srv",   1, 0, OPT_STUN_SRV},
         { "upnp",       2, 0, OPT_UPNP},
         { "add-buddy",  1, 0, OPT_ADD_BUDDY},
@@ -531,6 +559,7 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "turn-tls-privkey-pwd",1,0, OPT_TURN_TLS_PASSWORD},
         { "turn-tls-neg-timeout", 1, 0, OPT_TURN_TLS_NEG_TIMEOUT},
         { "turn-tls-cipher", 1, 0, OPT_TURN_TLS_CIPHER},
+        { "turn-tls-verify-server", 0, 0, OPT_TURN_TLS_VERIFY_SERVER},
 #endif
         { "turn-user",  1, 0, OPT_TURN_USER},
         { "turn-passwd",1, 0, OPT_TURN_PASSWD},
@@ -590,6 +619,8 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "timer-se",   1, 0, OPT_TIMER_SE},
         { "timer-min-se", 1, 0, OPT_TIMER_MIN_SE},
         { "outb-rid",   1, 0, OPT_OUTB_RID},
+        { "instance-id", 1, 0, OPT_INSTANCE_ID},
+        { "outb-disable", 0, 0, OPT_OUTB_DISABLE},
         { "video",      0, 0, OPT_VIDEO},
         { "text",       0, 0, OPT_TEXT},
         { "text-red",   1, 0, OPT_TEXT_RED},
@@ -607,7 +638,10 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "no-cli-console", 0, 0, OPT_DISABLE_CLI_CONSOLE},
         { "server-affinity", 2, 0, OPT_SERVER_AFFINITY},
 #if !PJSUA_MEDIA_HAS_PJMEDIA
+        { "acc-media-app-managed", 0, 0, OPT_ACC_MEDIA_APP_MANAGED},
         { "custom-sdp",     1, 0, OPT_CUSTOM_SDP},
+        { "sdp-passthrough", 0, 0, OPT_SDP_PASSTHROUGH},
+        { "dummy-codecs", 0, 0, OPT_DUMMY_CODECS},
 #endif
         { NULL, 0, 0, 0}
     };
@@ -905,6 +939,14 @@ static pj_status_t parse_args(int argc, char *argv[],
             cur_acc->rfc5626_reg_id = pj_str(pj_optarg);
             break;
 
+        case OPT_INSTANCE_ID:
+            cfg->instance_id = pj_str(pj_optarg);
+            break;
+
+        case OPT_OUTB_DISABLE:
+            cfg->outb_disable = PJ_TRUE;
+            break;
+
         case OPT_USE_IMS: /* Activate IMS settings */
             cur_acc->auth_pref.initial_auth = PJ_TRUE;
             break;
@@ -947,6 +989,24 @@ static pj_status_t parse_args(int argc, char *argv[],
 
         case OPT_AUTO_UPDATE_NAT:   /* OPT_AUTO_UPDATE_NAT */
             cur_acc->allow_contact_rewrite  = (pj_bool_t)pj_strtoul(pj_cstr(&tmp, pj_optarg));
+            break;
+
+        case OPT_CONTACT_REWRITE_METHOD:
+            {
+                unsigned long method;
+
+                pj_cstr(&tmp, pj_optarg);
+                if (pj_strspn2(&tmp, "0123456789") != tmp.slen ||
+                    pj_strtoul3(&tmp, &method, 10) != PJ_SUCCESS ||
+                    method > 7)
+                {
+                    PJ_LOG(1,(THIS_FILE, "Error: invalid "
+                              "--contact-rewrite-method value '%s'",
+                              pj_optarg));
+                    return PJ_EINVAL;
+                }
+                cur_acc->contact_rewrite_method = (int)method;
+            }
             break;
 
         case OPT_DISABLE_STUN:
@@ -1058,11 +1118,19 @@ static pj_status_t parse_args(int argc, char *argv[],
             break;
 
         case OPT_NAMESERVER: /* nameserver */
-            cfg->cfg.nameserver[cfg->cfg.nameserver_count++] = pj_str(pj_optarg);
-            if (cfg->cfg.nameserver_count > PJ_ARRAY_SIZE(cfg->cfg.nameserver)) {
+            if (cfg->cfg.nameserver_count == PJ_ARRAY_SIZE(cfg->cfg.nameserver)) {
                 PJ_LOG(1,(THIS_FILE, "Error: too many nameservers"));
                 return PJ_ETOOMANY;
             }
+            cfg->cfg.nameserver[cfg->cfg.nameserver_count++] = pj_str(pj_optarg);
+            break;
+
+        case OPT_SERVER_FAILOVER:
+            cfg->cfg.server_failover = PJ_TRUE;
+            break;
+
+        case OPT_RESOLVER_FALLBACK:
+            cfg->cfg.resolver_fallback = PJ_TRUE;
             break;
 
         case OPT_STUN_SRV:   /* STUN server */
@@ -1220,6 +1288,11 @@ static pj_status_t parse_args(int argc, char *argv[],
             cfg->media_cfg.turn_tls_setting.password =
                 cur_acc->turn_cfg.turn_tls_setting.password =
                     pj_str(pj_optarg);
+            break;
+
+        case OPT_TURN_TLS_VERIFY_SERVER:
+            cfg->media_cfg.turn_tls_setting.verify_server =
+                cur_acc->turn_cfg.turn_tls_setting.verify_server = PJ_TRUE;
             break;
 
         case OPT_TURN_TLS_NEG_TIMEOUT:
@@ -1664,9 +1737,14 @@ static pj_status_t parse_args(int argc, char *argv[],
             break;
 
         case OPT_CLI_TELNET_PORT:
+#if PJ_HAS_TCP
             cfg->cli_cfg.telnet_cfg.port = (pj_uint16_t)atoi(pj_optarg);
             cfg->cli_cfg.cli_fe |= CLI_FE_TELNET;
             break;
+#else
+            PJ_LOG(1,(THIS_FILE,"Error: telnet CLI requires TCP support"));
+            return PJ_EINVAL;
+#endif
 
         case OPT_DISABLE_CLI_CONSOLE:
             cfg->cli_cfg.cli_fe &= (~CLI_FE_CONSOLE);
@@ -1699,6 +1777,14 @@ static pj_status_t parse_args(int argc, char *argv[],
             break;
 
 #if !PJSUA_MEDIA_HAS_PJMEDIA
+        case OPT_ACC_MEDIA_APP_MANAGED:
+            cur_acc->media_app_managed = PJ_TRUE;
+            break;
+
+        case OPT_SDP_PASSTHROUGH:
+            cfg->sdp_passthrough = PJ_TRUE;
+            break;
+
         case OPT_CUSTOM_SDP:
         {
             /* Unescape \r\n and \n in the option value so the user can
@@ -1728,6 +1814,9 @@ static pj_status_t parse_args(int argc, char *argv[],
             cfg->custom_sdp.slen = (pj_ssize_t)(dst - cfg->custom_sdp.ptr);
             break;
         }
+        case OPT_DUMMY_CODECS:
+            cfg->dummy_codecs = PJ_TRUE;
+            break;
 #endif /* !PJSUA_MEDIA_HAS_PJMEDIA */
 
         default:
@@ -1862,6 +1951,9 @@ static void default_config()
     pjsua_media_config_default(&cfg->media_cfg);
     pjsua_transport_config_default(&cfg->udp_cfg);
     cfg->udp_cfg.port = 5060;
+#if !defined(PJ_HAS_TCP) || PJ_HAS_TCP==0
+    cfg->no_tcp = PJ_TRUE;
+#endif
     pjsua_transport_config_default(&cfg->rtp_cfg);
     cfg->rtp_cfg.port = 4000;
     cfg->enable_rtcp_mux = PJ_FALSE;
@@ -2086,6 +2178,11 @@ static void write_account_settings(int acc_index, pj_str_t *result,
                         (int)acc_cfg->allow_contact_rewrite);
     }
 
+    if (acc_cfg->contact_rewrite_method != PJSUA_CONTACT_REWRITE_METHOD) {
+        cfg_addf(result, max, "--contact-rewrite-method %d\n",
+                 acc_cfg->contact_rewrite_method);
+    }
+
 #if defined(PJMEDIA_HAS_SRTP) && (PJMEDIA_HAS_SRTP != 0)
     /* SRTP */
     if (acc_cfg->use_srtp) {
@@ -2204,6 +2301,11 @@ static void write_account_settings(int acc_index, pj_str_t *result,
     }
 
     /* Media Transport*/
+#if !PJSUA_MEDIA_HAS_PJMEDIA
+    if (acc_cfg->media_app_managed)
+        cfg_add(result, max, "--acc-media-app-managed\n");
+#endif
+
     if (acc_cfg->ice_cfg.enable_ice)
         cfg_add(result, max, "--use-ice\n");
 
@@ -2372,6 +2474,18 @@ int write_settings(pjsua_app_config *config, char *buf, pj_size_t max)
                               (int)config->cfg.nameserver[i].slen,
                               config->cfg.nameserver[i].ptr);
     }
+
+    if (config->cfg.server_failover)
+        cfg_add(&cfg, max, "--server-failover\n");
+    if (config->cfg.resolver_fallback)
+        cfg_add(&cfg, max, "--resolver-fallback\n");
+
+    if (config->instance_id.slen) {
+        cfg_addf(&cfg, max, "--instance-id %.*s\n",
+                 (int)config->instance_id.slen, config->instance_id.ptr);
+    }
+    if (config->outb_disable)
+        cfg_add(&cfg, max, "--outb-disable\n");
 
     /* Outbound proxy */
     for (i=0; i<config->cfg.outbound_proxy_cnt; ++i) {
@@ -2772,6 +2886,9 @@ int write_settings(pjsua_app_config *config, char *buf, pj_size_t max)
     }
 
 #if !PJSUA_MEDIA_HAS_PJMEDIA
+    if (config->sdp_passthrough)
+        cfg_add(&cfg, max, "--sdp-passthrough\n");
+
     if (config->custom_sdp.slen) {
         /* Escape actual CRLF/LF back to \r\n/\n when saving */
         const char *src = config->custom_sdp.ptr;
@@ -2802,6 +2919,9 @@ int write_settings(pjsua_app_config *config, char *buf, pj_size_t max)
         cfg_add(&cfg, max, "--custom-sdp \"");
         cfg_add_str(&cfg, max, &escaped);
         cfg_add(&cfg, max, "\"\n");
+    }
+    if (config->dummy_codecs) {
+        cfg_add(&cfg, max, "--dummy-codecs\n");
     }
 #endif /* !PJSUA_MEDIA_HAS_PJMEDIA */
 

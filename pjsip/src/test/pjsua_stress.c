@@ -37,7 +37,15 @@
  */
 
 /* For REG_RIP in <ucontext.h> on glibc; must precede any libc include. */
-#if defined(__linux__) && !defined(_GNU_SOURCE)
+/* Android defines __linux__ too, but bionic is not glibc: it declares
+ * backtrace() only from API 33 and its ucontext_t has a different shape.
+ * This harness runs on the Linux and macOS CI targets, so keep it off there.
+ */
+#if defined(__linux__) && !defined(__ANDROID__)
+#  define PJSUA_STRESS_GLIBC 1
+#endif
+
+#if defined(PJSUA_STRESS_GLIBC) && !defined(_GNU_SOURCE)
 #  define _GNU_SOURCE 1
 #endif
 
@@ -46,7 +54,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(PJSUA_STRESS_GLIBC) || defined(__APPLE__)
 #  include <execinfo.h>
 #  include <signal.h>
 #  include <unistd.h>
@@ -57,9 +65,20 @@
  * where <ucontext.h> needs no extra feature macro beyond _GNU_SOURCE above.
  * macOS's copy requires _XOPEN_SOURCE and its plain backtrace already
  * captures the crash site, so it is left on the fallback path. */
-#if defined(__linux__)
+#if defined(PJSUA_STRESS_GLIBC)
 #  include <ucontext.h>
 #  define PJSUA_STRESS_HAS_FAULT_PC 1
+#endif
+
+/* The Windows CRT has no rand_r(), and MinGW's ignores the seed */
+#if defined(PJ_WIN32) && PJ_WIN32 != 0
+static int stress_rand_r(unsigned *seed)
+{
+    *seed = *seed * 1103515245u + 12345u;
+    return (int)((*seed >> 16) & 0x7FFF);
+}
+#  undef rand_r
+#  define rand_r stress_rand_r
 #endif
 
 #define THIS_FILE  "pjsua_stress"
@@ -590,7 +609,7 @@ static int setup_pjsua(const stress_opts_t *opts)
     {
         pjsua_transport_id tid;
         pjsua_transport_info tinfo;
-        pjsua_transport_id ids[8];
+        pjsua_transport_id ids[PJSUA_MAX_TRANSPORTS];
         unsigned cnt = PJ_ARRAY_SIZE(ids);
         unsigned i;
         pjsua_acc_config acc_cfg;
@@ -745,7 +764,7 @@ static int run_stress(const stress_opts_t *opts)
         char name[32];
         worker_ctx_t *w = &g.workers[i];
         w->id = i;
-        w->rng_state = opts->seed ^ (unsigned)(i * 2654435761u);
+        w->rng_state = opts->seed ^ (unsigned)((pj_uint64_t)i * 2654435761u);
         pj_ansi_snprintf(name, sizeof(name), "stress-%d", i);
         status = pj_thread_create(g.pool, name, &worker_thread, w,
                                   0, 0, &w->thread);

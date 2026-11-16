@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -30,6 +30,7 @@
 
 #define HAS_VID_DEV_TEST        PJMEDIA_HAS_VIDEO
 #define HAS_VID_PORT_TEST       PJMEDIA_HAS_VIDEO
+#define HAS_VID_CONF_TEST       PJMEDIA_HAS_VIDEO
 #ifndef HAS_VID_CODEC_TEST
     #define HAS_VID_CODEC_TEST  PJMEDIA_HAS_VIDEO
 #endif
@@ -39,6 +40,9 @@
 #define HAS_MIPS_TEST           WITH_BENCHMARK
 #define HAS_CODEC_VECTOR_TEST   1
 #define HAS_TONE_DETECTOR_TEST  1
+#define HAS_TXT_STREAM_TEST     1
+#define HAS_TRANSPORT_SRTP_TEST (PJMEDIA_HAS_SRTP && \
+                                 PJMEDIA_SRTP_CHECK_ROC_ON_RESTART)
 
 int session_test(void);
 int rtp_test(void);
@@ -52,7 +56,10 @@ int codec_test_vectors(void);
 int vid_codec_test(void);
 int vid_dev_test(void);
 int vid_port_test(void);
+int vid_conf_test(void);
 int tone_detector_test(void);
+int txt_stream_test(void);
+int transport_srtp_test(void);
 
 extern pj_pool_factory *mem;
 void app_perror(pj_status_t status, const char *title);

@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -996,7 +996,9 @@ static int PJ_THREAD_FUNC wmme_dev_thread(void *arg)
                     frame = &strm->xfrm->base;
 
                     strm->xfrm->base.type = PJMEDIA_FRAME_TYPE_EXTENDED;
-                    strm->xfrm->base.size = strm->bytes_per_frame;
+                    /* Capacity of the subframes area, see pjmedia_frame_ext */
+                    strm->xfrm->base.size = strm->xfrm_size -
+                                            sizeof(pjmedia_frame_ext);
                     strm->xfrm->base.buf = NULL;
                     strm->xfrm->base.timestamp.u64 = wmme_strm->timestamp.u64;
                     strm->xfrm->base.bit_info = 0;
@@ -1451,6 +1453,20 @@ static pj_status_t stream_start(pjmedia_aud_stream *strm)
     {
         mr = waveInStart(stream->rec_strm.hWave.In);
         if (mr != MMSYSERR_NOERROR) {
+            /* Undo the playback restart above. The caller sees this stream as
+             * not started and will never stop it, so the device would be left
+             * running until the stream is destroyed. Playback is opened
+             * paused, so pausing is the correct resting state.
+             */
+            if (stream->play_strm.hWave.Out != NULL) {
+                MMRESULT pmr = waveOutPause(stream->play_strm.hWave.Out);
+                if (pmr != MMSYSERR_NOERROR) {
+                    PJ_PERROR(3, (THIS_FILE,
+                                  PJMEDIA_AUDIODEV_ERRNO_FROM_WMME_OUT(pmr),
+                                  "Failed to pause playback after capture "
+                                  "start failed; it is left running"));
+                }
+            }
             return PJMEDIA_AUDIODEV_ERRNO_FROM_WMME_IN(mr);
         }
         PJ_LOG(4,(THIS_FILE, "WMME capture stream started"));
@@ -1463,29 +1479,42 @@ static pj_status_t stream_start(pjmedia_aud_stream *strm)
 static pj_status_t stream_stop(pjmedia_aud_stream *strm)
 {
     struct wmme_stream *stream = (struct wmme_stream*)strm;
+    pj_status_t status = PJ_SUCCESS;
     MMRESULT mr;
 
     PJ_ASSERT_RETURN(stream != NULL, PJ_EINVAL);
 
+    /* Best effort: a failure on one direction must not leave the other
+     * running on a stream the caller believes is stopped. Attempt both and
+     * report the first error.
+     */
     if (stream->play_strm.hWave.Out != NULL)
     {
         mr = waveOutPause(stream->play_strm.hWave.Out);
         if (mr != MMSYSERR_NOERROR) {
-            return PJMEDIA_AUDIODEV_ERRNO_FROM_WMME_OUT(mr);
+            status = PJMEDIA_AUDIODEV_ERRNO_FROM_WMME_OUT(mr);
+            PJ_PERROR(3, (THIS_FILE, status,
+                          "Failed to stop WMME playback stream"));
+        } else {
+            PJ_LOG(4,(THIS_FILE, "Stopped WMME playback stream"));
         }
-        PJ_LOG(4,(THIS_FILE, "Stopped WMME playback stream"));
     }
 
     if (stream->rec_strm.hWave.In != NULL)
     {
         mr = waveInStop(stream->rec_strm.hWave.In);
         if (mr != MMSYSERR_NOERROR) {
-            return PJMEDIA_AUDIODEV_ERRNO_FROM_WMME_IN(mr);
+            pj_status_t rerr = PJMEDIA_AUDIODEV_ERRNO_FROM_WMME_IN(mr);
+            PJ_PERROR(3, (THIS_FILE, rerr,
+                          "Failed to stop WMME capture stream"));
+            if (status == PJ_SUCCESS)
+                status = rerr;
+        } else {
+            PJ_LOG(4,(THIS_FILE, "Stopped WMME capture stream"));
         }
-        PJ_LOG(4,(THIS_FILE, "Stopped WMME capture stream"));
     }
 
-    return PJ_SUCCESS;
+    return status;
 }
 
 

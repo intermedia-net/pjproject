@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -249,13 +249,17 @@ static int test_inner(int argc, char *argv[])
 
 #if INCLUDE_ICE_TEST
     UT_ADD_TEST(&test_app.ut_app, ice_wait_valid_pair_test, 0);
+    UT_ADD_TEST(&test_app.ut_app, ice_rx_data_stop_test, 0);
 #endif
 
 #if INCLUDE_TURN_SOCK_TEST
     UT_ADD_TEST1(&test_app.ut_app, turn_sock_test, (void*)(intptr_t)0, 0);
+#if PJ_HAS_TCP
+    /* TURN over TCP and TLS need a TCP test server */
     UT_ADD_TEST1(&test_app.ut_app, turn_sock_test, (void*)(intptr_t)1, 0);
     UT_ADD_TEST1(&test_app.ut_app, turn_sock_test, (void*)(intptr_t)2, 0);
-#endif
+#endif  /* PJ_HAS_TCP */
+#endif  /* INCLUDE_TURN_SOCK_TEST */
 
 #if INCLUDE_CONCUR_TEST
     UT_ADD_TEST(&test_app.ut_app, ice_conc_test, 0);

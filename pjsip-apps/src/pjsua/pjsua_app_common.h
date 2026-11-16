@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -89,10 +89,14 @@ typedef struct pjsua_app_config
     pj_bool_t               no_udp;
     pj_bool_t               use_tls;
     pj_bool_t               keep_call_on_tsx_fail;
+    pj_str_t                instance_id;
+    pj_bool_t               outb_disable;
     pjsua_transport_config  udp_cfg;
     pjsua_transport_config  rtp_cfg;
     pj_bool_t               enable_rtcp_mux;
     pj_bool_t               enable_rtcp_xr;
+    unsigned                media_dir_cnt;
+    pjmedia_dir             media_dir[PJMEDIA_MAX_SDP_MEDIA];
     pjsip_redirect_op       redir_op;
     int                     srtp_keying;
 
@@ -201,7 +205,12 @@ typedef struct pjsua_app_config
     /* Custom SDP to inject via on_call_sdp_created (replaces generated SDP).
      * Only available when PJSUA_MEDIA_HAS_PJMEDIA=0 (alt media backend). */
     pj_str_t                custom_sdp;
+    pj_bool_t               dummy_codecs;
 #endif
+
+    /* Set PJSUA_CALL_MEDIA_APP_MANAGED on the default call setting used for
+     * outgoing and auto-answered incoming calls (--sdp-passthrough). */
+    pj_bool_t                sdp_passthrough;
 } pjsua_app_config;
 
 /** Extern variable declaration **/
@@ -228,6 +237,21 @@ int write_settings(pjsua_app_config *cfg, char *buf, pj_size_t max);
 char *alloc_settings(pjsua_app_config *cfg, pj_pool_t **p_pool, int *p_len);
 pj_status_t dump_settings(pjsua_app_config *cfg);
 void app_config_init_video(pjsua_acc_config *acc_cfg);
+void app_config_apply_acc_setting(pjsua_acc_config *acc_cfg);
+#if !PJSUA_MEDIA_HAS_PJMEDIA
+pj_status_t app_parse_custom_sdp(pj_pool_t *pool,
+                                 pjmedia_sdp_session **sdp);
+#endif
+void app_config_init_call_setting(pjsua_call_setting *opt);
+pj_status_t app_make_call(pjsua_acc_id acc_id, const pj_str_t *uri,
+                         const pjsua_call_setting *opt,
+                         const pjsua_msg_data *msg_data,
+                         pjsua_call_id *call_id);
+pj_status_t app_answer_call(pjsua_call_id call_id,
+                           const pjsua_call_setting *opt,
+                           unsigned code, const pjsua_msg_data *msg_data);
+pj_status_t app_parse_media_dir(const pj_str_t *name, pjmedia_dir *dir);
+const char *app_media_dir_name(pjmedia_dir dir);
 void arrange_window(pjsua_vid_win_id wid);
 
 /** Defined in pjsua_app_config.c **/
@@ -275,4 +299,3 @@ void app_config_show_video(int acc_id, const pjsua_acc_config *acc_cfg);
 PJ_END_DECL
     
 #endif  /* __PJSUA_APP_COMMON_H__ */
-

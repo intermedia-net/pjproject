@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2019 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2019-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,6 +37,18 @@
  * calling thread indefinitely or grow the buffer until the process dies.
  */
 #define MAX_CERT_FILE_SIZE      (1024 * 1024)
+
+/* The private key comes with the certificate, never from privkey_*. */
+static void log_privkey_ignored(void)
+{
+#if TARGET_OS_IPHONE
+    PJ_LOG(3, (THIS_FILE, "Ignoring supplied private key. The key must "
+                          "be inside the PKCS#12 certificate bundle."));
+#else
+    PJ_LOG(3, (THIS_FILE, "Ignoring supplied private key. Private key "
+                          "must be placed in the keychain instead."));
+#endif
+}
 
 static pj_status_t create_data_from_file(CFDataRef *data,
                                          pj_str_t *fname, pj_str_t *path)
@@ -140,6 +152,16 @@ static pj_status_t create_data_from_file(CFDataRef *data,
     return PJ_SUCCESS;
 }
 
+/* CFStringGetCString() leaves the buffer undefined when the string does
+ * not fit, so a failed conversion yields an empty string instead. */
+static pj_bool_t cfstr_to_cstr(CFStringRef str, char *buf, size_t size)
+{
+    if (CFStringGetCString(str, buf, (CFIndex)size, kCFStringEncodingUTF8))
+        return PJ_TRUE;
+    buf[0] = '\0';
+    return PJ_FALSE;
+}
+
 #if !TARGET_OS_IPHONE
 static void get_info_and_cn(CFArrayRef array, CFMutableStringRef info,
                             CFStringRef *cn)
@@ -152,6 +174,8 @@ static void get_info_and_cn(CFArrayRef array, CFMutableStringRef info,
     int i, n;
 
     *cn = NULL;
+    if (!array || CFGetTypeID(array) != CFArrayGetTypeID())
+        return;
     for(i = 0; i < (int)PJ_ARRAY_SIZE(keys);  i++) {
         for (n = 0 ; n < CFArrayGetCount(array); n++) {
             CFDictionaryRef dict;
@@ -162,10 +186,12 @@ static void get_info_and_cn(CFArrayRef array, CFMutableStringRef info,
             if (CFGetTypeID(dict) != CFDictionaryGetTypeID())
                 continue;
             dictkey = CFDictionaryGetValue(dict, kSecPropertyKeyLabel);
-            if (!CFEqual(dictkey, keys[i]))
+            if (!dictkey || !CFEqual(dictkey, keys[i]))
                 continue;
             str = (CFStringRef) CFDictionaryGetValue(dict,
                                                      kSecPropertyKeyValue);
+            if (!str || CFGetTypeID(str) != CFStringGetTypeID())
+                continue;
 
             if (CFStringGetLength(str) > 0) {
                 if (add_separator) {
@@ -194,10 +220,13 @@ static CFDictionaryRef get_cert_oid(SecCertificateRef cert, CFStringRef oid,
                             &kCFTypeArrayCallBacks);
 
     vals = SecCertificateCopyValues(cert, key_arr, NULL);
-    dict = CFDictionaryGetValue(vals, key[0]);
+    dict = vals? CFDictionaryGetValue(vals, key[0]): NULL;
+    if (dict && CFGetTypeID(dict) != CFDictionaryGetTypeID())
+        dict = NULL;
     if (!dict) {
         CFRelease(key_arr);
-        CFRelease(vals);
+        if (vals)
+            CFRelease(vals);
         return NULL;
     }
 
@@ -212,18 +241,17 @@ static CFDictionaryRef get_cert_oid(SecCertificateRef cert, CFStringRef oid,
 
 /* Get certificate info; in case the certificate info is already populated,
  * this function will check if the contents need updating by inspecting the
- * issuer and the serial number. */
+ * issuer, the subject common name, and the serial number. */
 static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
-                          SecCertificateRef cert)
+                          SecCertificateRef cert, pj_bool_t reclaim)
 {
     pj_bool_t update_needed;
-    char buf[512];
+    char buf[512], buf2[512];
     size_t bufsize = sizeof(buf);
-    const pj_uint8_t *serial_no = NULL;
-    size_t serialsize = 0;
+    pj_uint8_t serial_no[sizeof(ci->serial_no)] = {0};
+    pj_bool_t serial_truncated = PJ_FALSE;
     CFMutableStringRef issuer_info;
-    CFStringRef str;
-    CFDataRef serial = NULL;
+    CFStringRef str = NULL;
 #if !TARGET_OS_IPHONE
     CFStringRef issuer_cn = NULL;
     CFDictionaryRef dict;
@@ -233,6 +261,8 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
 
     /* Get issuer */
     issuer_info = CFStringCreateMutable(NULL, 0);
+    if (!issuer_info)
+        return;
 #if !TARGET_OS_IPHONE
 {
     /* Unfortunately, unlike on Mac, on iOS we don't have these APIs
@@ -251,38 +281,75 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
     }
 }
 #endif
-    CFStringGetCString(issuer_info, buf, bufsize, kCFStringEncodingUTF8);
+    cfstr_to_cstr(issuer_info, buf, bufsize);
 
-    /* Get serial no */
+    /* Get serial no, right-aligned as the OpenSSL backend stores it, so a
+     * prefix or a zero-extended serial does not compare equal. Security
+     * framework keeps the DER sign octet, dropped only if it won't fit. */
     if (__builtin_available(macOS 10.13, iOS 11.0, *)) {
-        serial = SecCertificateCopySerialNumberData(cert, NULL);
+        CFDataRef serial = SecCertificateCopySerialNumberData(cert, NULL);
         if (serial) {
-            serial_no = CFDataGetBytePtr(serial);
-            serialsize = CFDataGetLength(serial);
+            const UInt8 *p = CFDataGetBytePtr(serial);
+            CFIndex len = CFDataGetLength(serial);
+            while (len > (CFIndex)sizeof(serial_no) && *p == 0) {
+                ++p;
+                --len;
+            }
+            if (len > (CFIndex)sizeof(serial_no)) {
+                len = sizeof(serial_no);
+                serial_truncated = PJ_TRUE;
+            }
+            pj_memcpy(serial_no + sizeof(serial_no) - len, p, len);
+            CFRelease(serial);
         }
     }
 
-    /* Check if the contents need to be updated */
+    /* Subject CN, part of the update check. Not the subject summary: that
+     * falls back to another attribute, e.g. the email, when there is no CN. */
+    buf2[0] = '\0';
+    if (SecCertificateCopyCommonName(cert, &str) == errSecSuccess && str) {
+        cfstr_to_cstr(str, buf2, sizeof(buf2));
+        CFRelease(str);
+        str = NULL;
+    }
+
+    /* Check if the contents need to be updated; a truncated serial cannot
+     * be proven equal, so it always refreshes. */
     update_needed = pj_strcmp2(&ci->issuer.info, buf) ||
-                    pj_memcmp(ci->serial_no, serial_no, serialsize);
+                    pj_strcmp2(&ci->subject.cn, buf2) ||
+                    pj_memcmp(ci->serial_no, serial_no, sizeof(serial_no)) ||
+                    serial_truncated;
     if (!update_needed) {
+#if !TARGET_OS_IPHONE
+        if (issuer_cn)
+            CFRelease(issuer_cn);
+#endif
         CFRelease(issuer_info);
         return;
     }
 
-    /* Update cert info */
+    /* Update cert info, first reclaiming the dedicated info pool so strings
+     * do not accumulate across renegotiations. */
+    if (reclaim)
+        pj_pool_reset(pool);
 
     pj_bzero(ci, sizeof(pj_ssl_cert_info));
 
     /* Version */
 #if !TARGET_OS_IPHONE
 {
-    CFStringRef version;
+    CFTypeRef version;
 
-    dict = get_cert_oid(cert, kSecOIDX509V1Version,
-                        (CFTypeRef *)&version);
+    dict = get_cert_oid(cert, kSecOIDX509V1Version, &version);
     if (dict) {
-        ci->version = CFStringGetIntValue(version);
+        /* The value may arrive as a CFNumber or a CFString; take either. */
+        if (version && CFGetTypeID(version) == CFNumberGetTypeID()) {
+            int v;
+            if (CFNumberGetValue(version, kCFNumberIntType, &v))
+                ci->version = (unsigned)v;
+        } else if (version && CFGetTypeID(version) == CFStringGetTypeID()) {
+            ci->version = CFStringGetIntValue((CFStringRef)version);
+        }
         CFRelease(dict);
     }
 }
@@ -292,7 +359,7 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
     pj_strdup2(pool, &ci->issuer.info, buf);
 #if !TARGET_OS_IPHONE
     if (issuer_cn) {
-        CFStringGetCString(issuer_cn, buf, bufsize, kCFStringEncodingUTF8);
+        cfstr_to_cstr(issuer_cn, buf, bufsize);
         pj_strdup2(pool, &ci->issuer.cn, buf);
         CFRelease(issuer_cn);
     }
@@ -300,24 +367,10 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
     CFRelease(issuer_info);
 
     /* Serial number */
-    if (serial) {
-        if (serialsize > sizeof(ci->serial_no))
-            serialsize = sizeof(ci->serial_no);
-        pj_memcpy(ci->serial_no, serial_no, serialsize);
-        CFRelease(serial);
-    }
+    pj_memcpy(ci->serial_no, serial_no, sizeof(ci->serial_no));
 
-    /* Subject Common Name.
-     *
-     * Note that SecCertificateCopySubjectSummary() must not be used here: it
-     * returns a display summary, which falls back to another attribute such
-     * as the email address when the subject carries no Common Name.
-     */
-    if (SecCertificateCopyCommonName(cert, &str) == errSecSuccess && str) {
-        CFStringGetCString(str, buf, bufsize, kCFStringEncodingUTF8);
-        pj_strdup2(pool, &ci->subject.cn, buf);
-        CFRelease(str);
-    }
+    /* Subject Common Name (already read for the update check). */
+    pj_strdup2(pool, &ci->subject.cn, buf2);
 #if !TARGET_OS_IPHONE
 {
     CFArrayRef subject;
@@ -327,14 +380,15 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
                         (CFTypeRef *)&subject);
     if (dict) {
         subject_info = CFStringCreateMutable(NULL, 0);
+        if (subject_info) {
+            get_info_and_cn(subject, subject_info, &str);
 
-        get_info_and_cn(subject, subject_info, &str);
+            cfstr_to_cstr(subject_info, buf, bufsize);
+            pj_strdup2(pool, &ci->subject.info, buf);
 
-        CFStringGetCString(subject_info, buf, bufsize, kCFStringEncodingUTF8);
-        pj_strdup2(pool, &ci->subject.info, buf);
-
+            CFRelease(subject_info);
+        }
         CFRelease(dict);
-        CFRelease(subject_info);
     }
 }
 #endif
@@ -348,7 +402,8 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
     dict = get_cert_oid(cert, kSecOIDX509V1ValidityNotBefore,
                         (CFTypeRef *)&validity);
     if (dict) {
-        if (CFNumberGetValue(validity, CFNumberGetType(validity),
+        if (validity && CFGetTypeID(validity) == CFNumberGetTypeID() &&
+            CFNumberGetValue(validity, CFNumberGetType(validity),
                              &interval))
         {
             /* Darwin's absolute reference date is 1 Jan 2001 00:00:00 GMT */
@@ -360,7 +415,8 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
     dict = get_cert_oid(cert, kSecOIDX509V1ValidityNotAfter,
                         (CFTypeRef *)&validity);
     if (dict) {
-        if (CFNumberGetValue(validity, CFNumberGetType(validity),
+        if (validity && CFGetTypeID(validity) == CFNumberGetTypeID() &&
+            CFNumberGetValue(validity, CFNumberGetType(validity),
                              &interval))
         {
             ci->validity.end.sec = (unsigned long)interval + 978278400L;
@@ -377,8 +433,14 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
     CFIndex i;
 
     dict = get_cert_oid(cert, kSecOIDSubjectAltName, (CFTypeRef *)&altname);
-    if (!dict || !CFArrayGetCount(altname))
+    if (!dict)
         return;
+    if (!altname || CFGetTypeID(altname) != CFArrayGetTypeID() ||
+        !CFArrayGetCount(altname))
+    {
+        CFRelease(dict);
+        return;
+    }
 
     ci->subj_alt_name.entry = pj_pool_calloc(pool, CFArrayGetCount(altname),
                                              sizeof(*ci->subj_alt_name.entry));
@@ -393,31 +455,71 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
             continue;
 
         label = (CFStringRef)CFDictionaryGetValue(item, kSecPropertyKeyLabel);
-        if (CFGetTypeID(label) != CFStringGetTypeID())
-            continue;
-
         value = (CFStringRef)CFDictionaryGetValue(item, kSecPropertyKeyValue);
+        if (!label || !value || CFGetTypeID(label) != CFStringGetTypeID())
+            continue;
 
         if (!CFStringCompare(label, CFSTR("DNS Name"),
                              kCFCompareCaseInsensitive))
         {
-            if (CFGetTypeID(value) != CFStringGetTypeID())
+            if (CFGetTypeID(value) != CFStringGetTypeID() ||
+                !cfstr_to_cstr(value, buf, bufsize))
                 continue;
-            CFStringGetCString(value, buf, bufsize, kCFStringEncodingUTF8);
             type = PJ_SSL_CERT_NAME_DNS;
         } else if (!CFStringCompare(label, CFSTR("IP Address"),
                                     kCFCompareCaseInsensitive))
         {
-            if (CFGetTypeID(value) != CFStringGetTypeID())
+            /* Normally in text form, but also accept the raw address.
+             * Either way, normalize it as the other backends do.
+             */
+            pj_uint8_t addr[16];
+            int af = 0;
+
+            if (CFGetTypeID(value) == CFStringGetTypeID()) {
+                pj_str_t ip;
+
+                if (!CFStringGetCString(value, buf, bufsize,
+                                        kCFStringEncodingUTF8))
+                {
+                    continue;
+                }
+                pj_cstr(&ip, buf);
+                if (ip.slen &&
+                    pj_inet_pton(pj_AF_INET(), &ip, addr) == PJ_SUCCESS)
+                {
+                    af = pj_AF_INET();
+                } else if (ip.slen &&
+                           pj_inet_pton(pj_AF_INET6(), &ip, addr) ==
+                                                                PJ_SUCCESS)
+                {
+                    af = pj_AF_INET6();
+                }
+            } else if (CFGetTypeID(value) == CFDataGetTypeID()) {
+                CFDataRef data = (CFDataRef)value;
+                CFIndex addr_len = CFDataGetLength(data);
+
+                if (addr_len == sizeof(pj_in_addr) ||
+                    addr_len == sizeof(pj_in6_addr))
+                {
+                    pj_memcpy(addr, CFDataGetBytePtr(data), addr_len);
+                    af = (addr_len == sizeof(pj_in6_addr))? pj_AF_INET6() :
+                                                            pj_AF_INET();
+                }
+            }
+
+            /* Ignore malformed IP address */
+            if (!af || pj_inet_ntop(af, addr, buf, (int)bufsize) !=
+                                                                PJ_SUCCESS)
+            {
                 continue;
-            CFStringGetCString(value, buf, bufsize, kCFStringEncodingUTF8);
+            }
             type = PJ_SSL_CERT_NAME_IP;
         } else if (!CFStringCompare(label, CFSTR("Email Address"),
                                     kCFCompareCaseInsensitive))
         {
-            if (CFGetTypeID(value) != CFStringGetTypeID())
+            if (CFGetTypeID(value) != CFStringGetTypeID() ||
+                !cfstr_to_cstr(value, buf, bufsize))
                 continue;
-            CFStringGetCString(value, buf, bufsize, kCFStringEncodingUTF8);
             type = PJ_SSL_CERT_NAME_RFC822;
         } else if (!CFStringCompare(label, CFSTR("URI"),
                                     kCFCompareCaseInsensitive))
@@ -427,27 +529,16 @@ static void get_cert_info(pj_pool_t *pool, pj_ssl_cert_info *ci,
             if (CFGetTypeID(value) != CFURLGetTypeID())
                 continue;
             uri = CFURLGetString((CFURLRef)value);
-            CFStringGetCString(uri, buf, bufsize, kCFStringEncodingUTF8);
+            if (!uri || !cfstr_to_cstr(uri, buf, bufsize))
+                continue;
             type = PJ_SSL_CERT_NAME_URI;
         }
 
         if (type != PJ_SSL_CERT_NAME_UNKNOWN) {
             ci->subj_alt_name.entry[ci->subj_alt_name.cnt].type = type;
-            if (type == PJ_SSL_CERT_NAME_IP) {
-                char ip_buf[PJ_INET6_ADDRSTRLEN+10];
-                int len = CFStringGetLength(value);
-                int af = pj_AF_INET();
-
-                if (len == sizeof(pj_in6_addr)) af = pj_AF_INET6();
-                pj_inet_ntop2(af, buf, ip_buf, sizeof(ip_buf));
-                pj_strdup2(pool,
-                    &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name,
-                    ip_buf);
-            } else {
-                pj_strdup2(pool,
-                    &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name,
-                    buf);
-            }
+            pj_strdup2(pool,
+                &ci->subj_alt_name.entry[ci->subj_alt_name.cnt].name,
+                buf);
             ci->subj_alt_name.cnt++;
         }
     }

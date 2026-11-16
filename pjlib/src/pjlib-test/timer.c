@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -290,9 +290,18 @@ static void st_entry_callback(pj_timer_heap_t *ht, pj_timer_entry *e)
     pj_atomic_set(tparam->status[e - tparam->entries], 0);
 #endif
 
-    /* try to cancel this */
+    /* try to cancel this, a stress thread may have rescheduled it */
+#if RANDOMIZED_TEST
+    if (pj_timer_heap_cancel_if_active(ht, e, 10) > 0) {
+        while (pj_atomic_get(tparam->status[e - tparam->entries]) != 1)
+            pj_thread_sleep(10);
+        pj_atomic_set(tparam->status[e - tparam->entries], 0);
+        pj_atomic_inc(tparam->n_cancel);
+    }
+#else
     pj_timer_heap_cancel_if_active(ht, e, 10);
-    
+#endif
+
     /* busy doing something */
     pj_thread_sleep(pj_rand() % 50);
 
@@ -484,6 +493,7 @@ static int timer_stress_test(void)
     pj_atomic_t **entries_status = NULL;
     pj_grp_lock_t **grp_locks = NULL;
     pj_pool_t *pool;
+    pj_pool_t *heap_pool = NULL;
     pj_timer_heap_t *timer = NULL;
     pj_lock_t *timer_lock;
     pj_status_t status;
@@ -506,11 +516,21 @@ static int timer_stress_test(void)
         goto on_return;
     }
 
+    /* The heap grows from the worker threads while this thread still
+     * allocates from pool, so the heap needs a pool of its own.
+     */
+    heap_pool = pj_pool_create( mem, NULL, 128, 128, NULL);
+    if (!heap_pool) {
+        PJ_LOG(3,("test", "...error: unable to create heap pool"));
+        err = -15;
+        goto on_return;
+    }
+
     /* Create timer heap.
      * Initially we only create a fraction of what's required,
      * to test the timer heap growth algorithm.
      */
-    status = pj_timer_heap_create(pool, ST_ENTRY_COUNT/64, &timer);
+    status = pj_timer_heap_create(heap_pool, ST_ENTRY_COUNT/64, &timer);
     if (status != PJ_SUCCESS) {
         app_perror("...error: unable to create timer heap", status);
         err = -20;
@@ -690,14 +710,14 @@ on_return:
     }
 
     for (i=0; i<ST_POLL_THREAD_COUNT; ++i) {
-        if (!poll_threads[i])
+        if (!poll_threads || !poll_threads[i])
             continue;
         pj_thread_join(poll_threads[i]);
         pj_thread_destroy(poll_threads[i]);
     }
     
     for (i=0; i<ST_CANCEL_THREAD_COUNT; ++i) {
-        if (!cancel_threads[i])
+        if (!cancel_threads || !cancel_threads[i])
             continue;
         pj_thread_join(cancel_threads[i]);
         pj_thread_destroy(cancel_threads[i]);
@@ -710,12 +730,15 @@ on_return:
     }
 
     for (i=0; i<ST_ENTRY_COUNT; ++i) {
-        count += pj_timer_heap_cancel_if_active(timer, &entries[i], 10);
-        if (entries_status)
+        if (timer && entries)
+            count += pj_timer_heap_cancel_if_active(timer, &entries[i], 10);
+        if (entries_status && entries_status[i])
             pj_atomic_destroy(entries_status[i]);
     }
 
     for (i=0; i<ST_ENTRY_GROUP_LOCK_COUNT; ++i) {
+        if (!grp_locks || !grp_locks[i])
+            continue;
         /* Ref count must be equal to 1 */
         if (pj_grp_lock_get_ref(grp_locks[i]) != 1) {
             pj_assert(!"Group lock ref count must be equal to 1");
@@ -766,6 +789,7 @@ on_return:
                           (match? "yes": "no")));
     }
 
+    pj_pool_safe_release(&heap_pool);
     pj_pool_safe_release(&pool);
 
     return (err? err: t_err);

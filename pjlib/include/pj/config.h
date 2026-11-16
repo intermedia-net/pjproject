@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -415,6 +415,16 @@
 #endif
 
 /**
+ * Include the atomic queue API (see pj/atomic_queue.h). Its implementation
+ * is C++, so a build without a C++ compiler sets this to 0.
+ *
+ * Default: 1.
+ */
+#ifndef PJ_HAS_ATOMIC_QUEUE
+#  define PJ_HAS_ATOMIC_QUEUE       1
+#endif
+
+/**
  * Declare maximum logging level/verbosity. Lower number indicates higher
  * importance, with the highest importance has level zero. The least
  * important level is five in this implementation, but this can be extended
@@ -691,8 +701,31 @@
 
 
 /**
+ * Specify whether the POSIX sched_yield() is available, which is used by
+ * pj_thread_sleep(0) to relinquish the CPU. It is mandatory in POSIX.1-2008
+ * and present on every mainstream POSIX platform, but an embedded RTOS
+ * (e.g. Zephyr or FreeRTOS) may only provide a partial POSIX layer. Set
+ * this to 0 on such a target and usleep(0) will be used instead; note that
+ * usleep(0) is considerably more expensive, as it sleeps for a full timer
+ * slack period rather than merely yielding.
+ *
+ * Default: 1
+ */
+#ifndef PJ_HAS_SCHED_YIELD
+#  define PJ_HAS_SCHED_YIELD        1
+#endif
+
+
+/**
  * Support TCP in the library.
- * Disabling TCP will reduce the footprint slightly (about 6KB).
+ * Disabling TCP will reduce the footprint slightly (about 4KB). With TCP
+ * disabled:
+ *  - pj_sock_socket() returns PJ_ENOTSUP for AF_INET/AF_INET6 stream
+ *    sockets.
+ *  - pj_ioqueue_connect() and pj_activesock_start_connect() only support
+ *    immediate completion (e.g. for UDP), and never return PJ_EPENDING.
+ *  - PJ_HAS_SSL_SOCK must be disabled (e.g. with --disable-ssl), and the
+ *    UWP ioqueue backend is not supported.
  *
  * Default: 1
  */
@@ -708,6 +741,30 @@
  */
 #ifndef PJ_HAS_IPV6
 #  define PJ_HAS_IPV6               0
+#endif
+
+/**
+ * Specify whether gethostbyname() is available. It was removed from
+ * POSIX.1-2008 and some minimal socket layers provide only getaddrinfo().
+ * When this is 0, pj_gethostbyname() is implemented over getaddrinfo(),
+ * so PJ_SOCK_HAS_GETADDRINFO (auto-detected by configure) must be set.
+ *
+ * Default: 1
+ */
+#ifndef PJ_SOCK_HAS_GETHOSTBYNAME
+#  define PJ_SOCK_HAS_GETHOSTBYNAME 1
+#endif
+
+/**
+ * Specify whether inet_addr() is available. When this is 0 and inet_aton()
+ * is not available either (PJ_SOCK_HAS_INET_ATON is 0), pj_inet_aton()
+ * uses inet_pton(), so PJ_SOCK_HAS_INET_PTON must be set. Both of those
+ * are auto-detected by configure.
+ *
+ * Default: 1
+ */
+#ifndef PJ_SOCK_HAS_INET_ADDR
+#  define PJ_SOCK_HAS_INET_ADDR     1
 #endif
 
  /**
@@ -769,6 +826,20 @@
  */
 #ifndef PJ_IOQUEUE_IMP
 #   define PJ_IOQUEUE_IMP               PJ_IOQUEUE_IMP_SELECT
+#endif
+
+
+/* With PJ_HAS_TCP disabled the ioqueue only supports a connect() that
+ * completes immediately, which is all a datagram socket ever needs. The UWP
+ * backend however performs even a datagram connect() asynchronously, via
+ * DatagramSocket::ConnectAsync(), so it does need the asynchronous connect
+ * completion and therefore requires TCP to be enabled. Reject the
+ * combination here, where both macros are final regardless of whether they
+ * came from autoconf, CMake or config_site.h.
+ */
+#if defined(PJ_HAS_TCP) && PJ_HAS_TCP==0 && \
+    PJ_IOQUEUE_IMP == PJ_IOQUEUE_IMP_UWP
+#   error PJ_IOQUEUE_IMP_UWP requires PJ_HAS_TCP
 #endif
 
 
@@ -1279,6 +1350,17 @@
 #endif
 
 
+/* Secure socket is connection oriented, i.e. it is implemented on top of
+ * TCP, so it cannot be built when TCP support is disabled. Reject the
+ * combination here, where both macros are final regardless of whether they
+ * came from autoconf, CMake or config_site.h.
+ */
+#if defined(PJ_HAS_TCP) && PJ_HAS_TCP==0 && \
+    defined(PJ_HAS_SSL_SOCK) && PJ_HAS_SSL_SOCK!=0
+#   error PJ_HAS_SSL_SOCK requires PJ_HAS_TCP
+#endif
+
+
 /* The Apple Network framework backend delivers every asynchronous event
  * through ssl_network_event_poll(), whose only caller is the select()
  * ioqueue. With any other ioqueue the event queue is never drained, so the
@@ -1340,7 +1422,8 @@
 /**
  * Maximum number of TLS client sessions cached for resumption by the OpenSSL
  * backend when pj_ssl_sock_param.enable_session_reuse is set. Sessions are
- * cached per server name; the oldest entry is evicted when the cache is full.
+ * cached per server name and per CA list, certificate and verification
+ * settings; the oldest entry is evicted when the cache is full.
  *
  * Default: 64
  */
@@ -1357,6 +1440,18 @@
  */
 #ifndef PJ_SOCK_DISABLE_WSAECONNRESET
 #   define PJ_SOCK_DISABLE_WSAECONNRESET    1
+#endif
+
+
+/**
+ * Use fcntl(F_SETFL, O_NONBLOCK) instead of ioctl(FIONBIO) to put sockets
+ * registered to the ioqueue in non-blocking mode, for socket layers that
+ * have no FIONBIO.
+ *
+ * Default: 0
+ */
+#ifndef PJ_SOCK_NONBLOCK_USE_FCNTL
+#   define PJ_SOCK_NONBLOCK_USE_FCNTL       0
 #endif
 
 

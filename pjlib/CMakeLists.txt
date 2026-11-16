@@ -37,7 +37,6 @@ add_library(pjlib
   src/pj/activesock.c
   src/pj/addr_resolv_sock.c
   src/pj/array.c
-  src/pj/atomic_queue.cpp
   src/pj/atomic_slist.c
   src/pj/config.c
   src/pj/ctype.c
@@ -50,7 +49,6 @@ add_library(pjlib
   src/pj/ioqueue_epoll.c
   src/pj/ioqueue_kqueue.c
   src/pj/ioqueue_select.c
-  src/pj/ip_helper_generic.c
   src/pj/list.c
   src/pj/lock.c
   src/pj/log.c
@@ -179,17 +177,28 @@ target_sources(pjlib
         include/pj/unittest.h
 )
 
+# atomic_queue is C++, used by the Android audio and codec backends only
+if(PJ_WITH_CXX)
+  target_sources(pjlib PRIVATE src/pj/atomic_queue.cpp)
+  set(PJ_HAS_ATOMIC_QUEUE 1)
+else()
+  set(PJ_HAS_ATOMIC_QUEUE 0)
+endif()
+
 # system APIs
 if(WIN32 OR CYGWIN OR MINGW)
   target_sources(pjlib
     PRIVATE
       src/pj/file_io_win32.c
       src/pj/guid_win32.c
+      src/pj/ioqueue_winnt.c
+      src/pj/ip_helper_win32.c
       src/pj/os_core_win32.c
       src/pj/os_error_win32.c
       src/pj/os_time_win32.c
       src/pj/os_timestamp_win32.c
       src/pj/sock_qos_bsd.c
+      src/pj/ssl_sock_schannel.c
       src/pj/unicode_win32.c
   )
 else()
@@ -197,6 +206,7 @@ else()
     PRIVATE
       src/pj/file_access_unistd.c
       src/pj/file_io_ansi.c
+      src/pj/ip_helper_generic.c
       src/pj/os_core_unix.c
       src/pj/os_error_unix.c
       src/pj/os_time_unix.c
@@ -235,10 +245,19 @@ include(CheckIncludeFile)
 if(WIN32 OR CYGWIN OR MINGW)
   check_include_file(winsock.h PJ_HAS_WINSOCK_H)
   check_include_file(winsock2.h PJ_HAS_WINSOCK2_H)
-  check_include_file(mswsock.h PJ_HAS_MSWSOCK_H)
+  # mswsock.h does not compile on its own, it needs winsock2.h first. Under
+  # its own cache key: the plain check of it once failed into
+  # PJ_HAS_MSWSOCK_H, and a cached result is never probed again.
+  include(CheckIncludeFiles)
+  check_include_files("winsock2.h;mswsock.h" PJ_HAS_WINSOCK2_MSWSOCK_H)
+  set(PJ_HAS_MSWSOCK_H "${PJ_HAS_WINSOCK2_MSWSOCK_H}")
   check_include_file(ws2tcpip.h PJ_HAS_WS2TCPIP_H)
 
-  target_link_libraries(pjlib PRIVATE ole32 winmm)
+  # iphlpapi for ip_helper_win32.c, mswsock for AcceptEx() in ioqueue_winnt.c
+  target_link_libraries(pjlib PRIVATE ole32 winmm iphlpapi)
+  if(PJ_HAS_MSWSOCK_H)
+    target_link_libraries(pjlib PRIVATE mswsock)
+  endif()
   if(PJ_HAS_WINSOCK2_H)
     target_link_libraries(pjlib PRIVATE ws2_32)
   elseif(PJ_HAS_WINSOCK_H)
@@ -265,13 +284,18 @@ if(APPLE)
   # needs the C++ runtime even when the consumer is pure C. Nothing surfaces
   # this while building the archive; it appears as undefined std::terminate()
   # when an application is linked.
-  target_link_libraries(pjlib PUBLIC c++)
+  if(PJ_WITH_CXX)
+    target_link_libraries(pjlib PUBLIC c++)
+  endif()
 endif()
 
 # math library
 if(NOT (WIN32 OR CYGWIN OR MINGW))
   find_library(MATH_LIBRARY m)
-  if(MATH_LIBRARY)
+  # A toolchain for a Generic system (no OS, or an RTOS such as Zephyr)
+  # ships libm beside its libc and resolves -lm through its multilib specs,
+  # where find_library() does not look.
+  if(MATH_LIBRARY OR CMAKE_SYSTEM_NAME STREQUAL "Generic")
     target_link_libraries(pjlib PUBLIC m)
   elseif(PJLIB_WITH_FLOATING_POINT)
     pj_force_set(PJLIB_WITH_FLOATING_POINT OFF "math library not found")
@@ -317,11 +341,17 @@ elseif(PJLIB_WITH_SSL STREQUAL "gnutls")
   target_link_libraries(pjlib-ssl INTERFACE GnuTLS::GnuTLS)
 elseif(PJLIB_WITH_SSL STREQUAL "mbedtls")
   find_package(MbedTLS CONFIG REQUIRED)
+  # Mbed TLS 4.x moved the crypto library to TF-PSA-Crypto
+  if(TARGET MbedTLS::tfpsacrypto)
+    set(_pj_mbedtls_crypto MbedTLS::tfpsacrypto)
+  else()
+    set(_pj_mbedtls_crypto MbedTLS::mbedcrypto)
+  endif()
   target_link_libraries(pjlib-ssl
     INTERFACE
       MbedTLS::mbedtls
-      MbedTLS::mbedcrypto
       MbedTLS::mbedx509
+      ${_pj_mbedtls_crypto}
   )
 elseif(PJLIB_WITH_SSL STREQUAL "darwin")
   if(NOT APPLE)
@@ -354,7 +384,11 @@ elseif(PJLIB_WITH_SSL STREQUAL "apple")
       "${Foundation_LIBRARY}"
   )
 elseif(PJLIB_WITH_SSL STREQUAL "schannel")
-  message(FATAL_ERROR "TODO")
+  # ssl_sock_schannel.c compiles to nothing on other Windows compilers
+  if(NOT MSVC)
+    message(FATAL_ERROR "PJLIB_WITH_SSL=schannel requires MSVC")
+  endif()
+  target_link_libraries(pjlib-ssl INTERFACE secur32 crypt32 bcrypt shlwapi)
 endif()
 target_link_libraries(pjlib PRIVATE pjlib-ssl)
 
@@ -471,7 +505,6 @@ block(SCOPE_FOR VARIABLES)
   endif()
 
   check_include_file(fcntl.h PJ_HAS_FCNTL_H)
-  check_include_file(ifaddrs.h PJ_HAS_IFADDRS_H)
   check_include_file(limits.h PJ_HAS_LIMITS_H)
   check_include_file(linux/socket.h PJ_HAS_LINUX_SOCKET_H)
   check_include_file(malloc.h PJ_HAS_MALLOC_H)
@@ -489,6 +522,7 @@ block(SCOPE_FOR VARIABLES)
   check_include_file(stdint.h PJ_HAS_STDINT_H)
   check_include_file(stdlib.h PJ_HAS_STDLIB_H)
   check_include_file(string.h PJ_HAS_STRING_H)
+  check_include_file(strings.h PJ_HAS_STRINGS_H)
   check_include_file(inttypes.h PJ_HAS_INTTYPES_H)
   check_include_file(sys/ioctl.h PJ_HAS_SYS_IOCTL_H)
   check_include_file(sys/select.h PJ_HAS_SYS_SELECT_H)
@@ -513,12 +547,45 @@ block(SCOPE_FOR VARIABLES)
 
   include(CheckSymbolExists)
   check_symbol_exists(localtime_r time.h PJ_HAS_LOCALTIME_R)
-  check_symbol_exists(getifaddrs ifaddrs.h PJ_HAS_IFADDRS_H)
-  check_symbol_exists(inet_aton arpa/inet.h PJ_SOCK_HAS_INET_ATON)
-  check_symbol_exists(inet_pton arpa/inet.h PJ_SOCK_HAS_INET_PTON)
-  check_symbol_exists(inet_ntop arpa/inet.h PJ_SOCK_HAS_INET_NTOP)
-  check_symbol_exists(getaddrinfo netdb.h PJ_SOCK_HAS_GETADDRINFO)
-  check_symbol_exists(socketpair sys/socket.h PJ_SOCK_HAS_SOCKETPAIR)
+  # The header alone is not enough: bionic ships <ifaddrs.h> at every API
+  # level but declares getifaddrs() only from API 24.
+  #
+  # Probed under its own cache key, not straight into PJ_HAS_IFADDRS_H. That
+  # name once held the result of a check_include_file() probe, and these
+  # checks skip their test whenever the result variable is already cached, so
+  # reusing it would leave every build tree configured before this change
+  # stuck on the old answer.
+  check_symbol_exists(getifaddrs ifaddrs.h PJ_HAS_GETIFADDRS)
+  # Quoted: a failed check leaves PJ_HAS_GETIFADDRS empty, and an unquoted
+  # empty expansion would turn this into an unset(), which would let that
+  # stale cache entry show through again.
+  set(PJ_HAS_IFADDRS_H "${PJ_HAS_GETIFADDRS}")
+  if(WIN32)
+    # Probed against the same _WIN32_WINNT the build uses, as ws2tcpip.h
+    # declares inet_pton() and inet_ntop() only from Vista (0x0600). Under
+    # their own cache keys, for the same reason as PJ_HAS_GETIFADDRS above:
+    # the POSIX probes once failed into the PJ_SOCK_HAS_* names here.
+    include(CMakePushCheckState)
+    cmake_push_check_state()
+    set(CMAKE_REQUIRED_DEFINITIONS -D_WIN32_WINNT=${PJ_WIN32_WINNT})
+    set(CMAKE_REQUIRED_LIBRARIES ws2_32)
+    check_symbol_exists(inet_pton "winsock2.h;ws2tcpip.h"
+      PJ_WS2_HAS_INET_PTON)
+    check_symbol_exists(inet_ntop "winsock2.h;ws2tcpip.h"
+      PJ_WS2_HAS_INET_NTOP)
+    check_symbol_exists(getaddrinfo "winsock2.h;ws2tcpip.h"
+      PJ_WS2_HAS_GETADDRINFO)
+    cmake_pop_check_state()
+    set(PJ_SOCK_HAS_INET_PTON "${PJ_WS2_HAS_INET_PTON}")
+    set(PJ_SOCK_HAS_INET_NTOP "${PJ_WS2_HAS_INET_NTOP}")
+    set(PJ_SOCK_HAS_GETADDRINFO "${PJ_WS2_HAS_GETADDRINFO}")
+  else()
+    check_symbol_exists(inet_aton arpa/inet.h PJ_SOCK_HAS_INET_ATON)
+    check_symbol_exists(inet_pton arpa/inet.h PJ_SOCK_HAS_INET_PTON)
+    check_symbol_exists(inet_ntop arpa/inet.h PJ_SOCK_HAS_INET_NTOP)
+    check_symbol_exists(getaddrinfo netdb.h PJ_SOCK_HAS_GETADDRINFO)
+    check_symbol_exists(socketpair sys/socket.h PJ_SOCK_HAS_SOCKETPAIR)
+  endif()
 
   #
   # compilation checks
@@ -650,6 +717,19 @@ block(SCOPE_FOR VARIABLES)
     check_symbol_exists(pthread_set_name_np pthread_np.h
       PJ_HAS_PTHREAD_SET_NAME_NP
     )
+  else()
+    # declared in pthread.h on Linux, Android and Darwin (glibc: _GNU_SOURCE)
+    include(CMakePushCheckState)
+    cmake_push_check_state()
+    set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
+    # glibc < 2.34 has it in libpthread only
+    if(TARGET Threads::Threads)
+      set(CMAKE_REQUIRED_LIBRARIES Threads::Threads)
+    endif()
+    check_symbol_exists(pthread_setname_np pthread.h
+      PJ_HAS_PTHREAD_SETNAME_NP
+    )
+    cmake_pop_check_state()
   endif()
 
   #
@@ -703,6 +783,9 @@ block(SCOPE_FOR VARIABLES)
   #
 
   # i/o queue implementation
+  if(PJLIB_WITH_IOQUEUE STREQUAL "iocp" AND NOT WIN32)
+    message(FATAL_ERROR "PJLIB_WITH_IOQUEUE=iocp requires Windows")
+  endif()
   if(NOT PJLIB_WITH_IOQUEUE STREQUAL "")
     string(TOUPPER "PJ_IOQUEUE_IMP_${PJLIB_WITH_IOQUEUE}" PJ_IOQUEUE_IMP)
   else()
@@ -740,6 +823,11 @@ target_sources(pjlib
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
       FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/include/pj/config_site.h"
+        # config_site.h is where a build states its overrides, and the
+        # documented way to write one is to include config_site_sample.h and
+        # pick a profile from it. Installing the former without the latter
+        # leaves such a config_site.h dangling in the installed tree.
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/pj/config_site_sample.h"
         "${CMAKE_CURRENT_BINARY_DIR}/include/pj/compat/m_auto.h"
         "${CMAKE_CURRENT_BINARY_DIR}/include/pj/compat/os_auto.h"
 )
@@ -776,6 +864,7 @@ if(BUILD_TESTING)
     src/pjlib-test/sock.c
     src/pjlib-test/sock_perf.c
     src/pjlib-test/ssl_sock.c
+    src/pjlib-test/ssl_sock_apple_test.c
     src/pjlib-test/ssl_sock_stress.c
     src/pjlib-test/string.c
     src/pjlib-test/test.c
@@ -790,6 +879,14 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(pjlib-test PRIVATE pjlib pjlib-ssl)
+  if(APPLE)
+    # ssl_sock_apple_test.c calls Security.framework directly,
+    # independent of which SSL backend was configured.
+    find_library(Security_LIBRARY Security REQUIRED)
+    find_library(CoreFoundation_LIBRARY CoreFoundation REQUIRED)
+    target_link_libraries(pjlib-test PRIVATE
+      "${Security_LIBRARY}" "${CoreFoundation_LIBRARY}")
+  endif()
 
   add_test(NAME pjlib-test COMMAND pjlib-test)
 endif()
@@ -837,3 +934,6 @@ if(BUILD_TESTING AND FALSE) # does not compile
 
   add_test(NAME pjlib++-test COMMAND pjlib++-test)
 endif()
+
+# For the pkg-config file: the files of the dependencies found here
+pj_pc_remember_imported_targets()

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2013-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -114,9 +114,9 @@ struct AccountRegConfig : public PersistentObject
      * disable auto re-registration. Note that if the registration retry
      * occurs because of transport failure, the first retry will be done
      * after \a firstRetryIntervalSec seconds instead. Also note that
-     * the interval will be randomized slightly by some seconds (specified
-     * in \a reg_retry_random_interval) to avoid all clients re-registering
-     * at the same time.
+     * the interval will be randomized by \a randomRetryIntervalSec to
+     * avoid all clients re-registering at the same time; see there for
+     * the resulting range.
      *
      * See also \a firstRetryIntervalSec and \a randomRetryIntervalSec
      * settings.
@@ -128,9 +128,9 @@ struct AccountRegConfig : public PersistentObject
     /**
      * This specifies the interval for the first registration retry. The
      * registration retry is explained in \a retryIntervalSec. Note that
-     * the value here will also be randomized by some seconds (specified
-     * in \a reg_retry_random_interval) to avoid all clients re-registering
-     * at the same time.
+     * the value here will also be randomized by \a randomRetryIntervalSec
+     * to avoid all clients re-registering at the same time; see there for
+     * the resulting range.
      *
      * See also \a retryIntervalSec and \a randomRetryIntervalSec settings.
      *
@@ -141,11 +141,15 @@ struct AccountRegConfig : public PersistentObject
     /**
      * This specifies maximum randomized value to be added/substracted
      * to/from the registration retry interval specified in \a
-     * reg_retry_interval and \a reg_first_retry_interval, in second.
+     * retryIntervalSec and \a firstRetryIntervalSec, in second.
      * This is useful to avoid all clients re-registering at the same time.
      * For example, if the registration retry interval is set to 100 seconds
      * and this is set to 10 seconds, the actual registration retry interval
-     * will be in the range of 90 to 110 seconds.
+     * will be in the range of 90 to 110 seconds. If the retry interval is
+     * shorter than \a randomRetryIntervalSec, it cannot be reduced by that
+     * much, and the actual interval will be in the range of 0 to the retry
+     * interval plus \a randomRetryIntervalSec instead: for example 0 to 15
+     * seconds for a retry interval of 5 seconds.
      *
      * See also \a retryIntervalSec and \a firstRetryIntervalSec settings.
      *
@@ -431,6 +435,12 @@ struct AccountCallConfig : public PersistentObject
      */
     unsigned            timerSessExpiresSec;
 
+    /**
+     * Make new calls on this account application-managed from creation.
+     * Default: false.
+     */
+    bool                mediaAppManaged;
+
 public:
     /**
      * Default constructor
@@ -442,7 +452,8 @@ public:
                           siprecRequireLabel(false),
                           siprecRequireMetadata(false),
                           timerMinSESec(90),
-                          timerSessExpiresSec(PJSIP_SESS_TIMER_DEF_SE)
+                          timerSessExpiresSec(PJSIP_SESS_TIMER_DEF_SE),
+                          mediaAppManaged(false)
     {}
 
     /**
@@ -706,7 +717,7 @@ struct AccountNatConfig : public PersistentObject
 
     /**
      * Specify the connection type to be used to the TURN server. Valid
-     * values are PJ_TURN_TP_UDP or PJ_TURN_TP_TCP.
+     * values are PJ_TURN_TP_UDP, PJ_TURN_TP_TCP, or PJ_TURN_TP_TLS.
      *
      * Default: PJ_TURN_TP_UDP
      */
@@ -727,6 +738,19 @@ struct AccountNatConfig : public PersistentObject
      * Specify the password to authenticate with the TURN server.
      */
     string              turnPassword;
+
+    /**
+     * Specify the TLS settings for the connection to the TURN server, only
+     * used when \a turnConnType is PJ_TURN_TP_TLS. See TlsConfig for the
+     * fields that are ignored here. To verify the TURN server certificate,
+     * enable TlsConfig::verifyServer and specify the trusted CA
+     * certificates, e.g: via TlsConfig::CaListFile.
+     *
+     * The default values are the TURN TLS defaults, e.g: the TLS
+     * negotiation timeout, so modify this field in place rather than
+     * assigning a new TlsConfig instance, which has the SIP TLS defaults.
+     */
+    TlsConfig           turnTlsConfig;
 
     /**
      * This option is used to update the transport address and the Contact
@@ -765,8 +789,10 @@ struct AccountNatConfig : public PersistentObject
     /**
      * Specify if source TCP port should be used as the initial Contact
      * address if TCP/TLS transport is used. Note that this feature will
-     * be automatically turned off when nameserver is configured because
-     * it may yield different destination address due to DNS SRV resolution.
+     * be automatically turned off when nameservers are configured
+     * (UaConfig::nameserver) or when the application sets a DNS resolver
+     * or an external resolver on the SIP endpoint, because they may yield
+     * a different destination address due to DNS SRV resolution.
      * Also some platforms are unable to report the local address of the
      * TCP socket when it is still connecting. In these cases, this
      * feature will also be turned off.
@@ -818,6 +844,13 @@ struct AccountNatConfig : public PersistentObject
      * the hostname of this agent. If application specifies this parameter, the
      * value will look like "<urn:uuid:00000000-0000-1000-8000-AABBCCDDEEFF>"
      * without the double-quotes.
+     *
+     * An instance ID set here is sent in every REGISTER, also without SIP
+     * outbound. Registrars such as Kamailio and Flexisip then treat contacts
+     * with the same instance ID as one device and replace the older binding,
+     * so the ID must be unique to the device and persistent (RFC 5626
+     * section 4.1). The generated one is sent only with outbound: it is the
+     * same for all instances on one host, and on iOS ("localhost").
      *
      * Default: empty
      */
@@ -878,7 +911,14 @@ public:
       sipOutboundUse(PJ_TRUE),
       udpKaIntervalSec(15),
       udpKaData("\r\n")
-    {}
+    {
+#if PJ_HAS_SSL_SOCK
+        pj_turn_sock_tls_cfg tls_cfg;
+
+        pj_turn_sock_tls_cfg_default(&tls_cfg);
+        turnTlsConfig.fromTurnPj(tls_cfg);
+#endif
+    }
 
     /**
      * Read this object from a container node.
@@ -1991,10 +2031,16 @@ public:
     /**
      * Respond to the authentication challenge by building and sending
      * an authenticated request. Uses credentials currently configured
-     * on the auth session.
+     * on the auth session. A deferred REGISTER is not sent, and
+     * PJ_ECANCELLED is returned, if the account has sent or started
+     * another REGISTER since the challenge, or has dropped its
+     * registration and the deferred REGISTER is not an unregistration.
+     * The challenge is consumed whatever the result.
      *
-     * @return          PJ_SUCCESS on success, or PJ_EINVALIDOP if already
-     *                  consumed by a prior respond()/abandon()/defer() call.
+     * @return          PJ_SUCCESS on success, PJ_EINVALIDOP if already
+     *                  consumed by a prior respond()/abandon()/defer() call
+     *                  or if the account has been deleted, or the error of
+     *                  building or sending the request.
      */
     pj_status_t respond();
 
@@ -2005,13 +2051,16 @@ public:
      * affecting all subsequent authentication for the account.
      *
      * @param creds     Credentials to set on the auth session.
-     * @return          PJ_SUCCESS on success.
+     * @return          Same as respond(), or the error of setting the
+     *                  credentials.
      */
     pj_status_t respond(const AuthCredInfoVector &creds);
 
     /**
      * Abandon the authentication challenge. The pending request will
-     * not be resent.
+     * not be resent. Abandoning a deferred REGISTER that the account has
+     * superseded doesn't report a registration failure: the newer
+     * REGISTER reports the result.
      *
      * @return          PJ_SUCCESS on success, or PJ_EINVALIDOP if already
      *                  consumed by a prior respond()/abandon()/defer() call.
@@ -2347,7 +2396,10 @@ public:
     /**
      * Get PJSUA-LIB account ID or index associated with this account.
      *
-     * @return                  Integer greater than or equal to zero.
+     * @return                  Integer greater than or equal to zero, or
+     *                          PJSUA_INVALID_ID if the account has not been
+     *                          created or has been shut down (except while
+     *                          the library is being destroyed).
      */
     int getId() const;
 
@@ -2396,6 +2448,11 @@ public:
      * Update registration or perform unregistration. Application normally
      * only needs to call this function if it wants to manually update the
      * registration or to unregister from the server.
+     *
+     * After an unregistration, the library doesn't register the account
+     * again by itself, e.g: on IP change or with an auto retry, until the
+     * application renews the registration or modifies the account so that
+     * it registers.
      *
      * @param renew             If False, this will start unregistration
      *                          process.
@@ -2542,7 +2599,8 @@ public:
     /**
      * Notify application when registration status has changed.
      * Application may then query the account info to get the
-     * registration details.
+     * registration details. The result of a REGISTER is not reported once
+     * the account has sent a newer one, which reports its own.
      *
      * @param prm           Callback parameter.
      */
@@ -2670,6 +2728,7 @@ private:
 private:
     pjsua_acc_id         id;
     string               tmpReason;     // for saving response's reason
+    SipTxOption          tmpTxOption;   // for saving response's tx option
 #if !DEPRECATED_FOR_TICKET_2232
     BuddyVector          buddyList;
 #endif
@@ -2682,4 +2741,3 @@ private:
 } // namespace pj
 
 #endif  /* __PJSUA2_ACCOUNT_HPP__ */
-

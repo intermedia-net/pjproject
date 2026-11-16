@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2022-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -322,7 +322,12 @@ pj_ioqueue_register_sock2(pj_pool_t *pool, pj_ioqueue_t *ioqueue,
 
     /* Set socket to nonblocking. */
     value = 1;
+#if defined(PJ_SOCK_NONBLOCK_USE_FCNTL) && PJ_SOCK_NONBLOCK_USE_FCNTL != 0
+    PJ_UNUSED_ARG(value);
+    if (fcntl_set_nonblock(sock) < 0) {
+#else
     if (ioctl(sock, FIONBIO, &value)) {
+#endif
         rc = pj_get_netos_error();
         goto on_return;
     }
@@ -693,10 +698,18 @@ PJ_DEF(int) pj_ioqueue_poll(pj_ioqueue_t *ioqueue, const pj_time_val *timeout)
                 if (ioqueue_dispatch_write_event(ioqueue, queue[i].key))
                     ++processed_cnt;
                 break;
+#if PJ_HAS_TCP
             case EXCEPTION_EVENT:
                 if (ioqueue_dispatch_exception_event(ioqueue, queue[i].key))
                     ++processed_cnt;
                 break;
+#else
+            case EXCEPTION_EVENT:
+                /* Not reachable: only a key with a pending connect()
+                 * queues this, and without TCP pj_ioqueue_connect() never
+                 * leaves a key in that state.
+                 */
+#endif
             case NO_EVENT:
                 pj_assert(!"Invalid event!");
                 break;

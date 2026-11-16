@@ -167,11 +167,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
       -Wno-return-type
       -Wno-deprecated-builtins
   )
+elseif(MSVC)
+  # As third_party/build/webrtc_aec3/libwebrtc_aec3.vcxproj
+  target_compile_options(webrtc_aec3
+    PRIVATE
+      /wd4005 /wd4100 /wd4127 /wd4244 /wd4267 /wd4305 /wd4311 /wd4456
+      /wd4530 /wd4715
+  )
 endif()
 
 include(DetectWebRTCParameters)
 target_compile_options(webrtc_aec3 PRIVATE ${WEBRTC_COMPILE_OPTIONS})
-target_compile_definitions(webrtc_aec3 PRIVATE ${WEBRTC_COMPILE_DEFINITIONS})
+# public: echo_webrtc_aec3.cpp includes WebRTC headers that need them
+target_compile_definitions(webrtc_aec3 PUBLIC ${WEBRTC_COMPILE_DEFINITIONS})
 
 # Include SIMD source files
 if(WEBRTC_ARCH_SIMD STREQUAL "neon")
@@ -185,23 +193,44 @@ elseif(WEBRTC_ARCH_SIMD STREQUAL "sse2")
     PRIVATE
       src/common_audio/resampler/sinc_resampler_sse.cc
       src/common_audio/third_party/ooura/fft_size_128/ooura_fft_sse2.cc
-      src/common_audio/resampler/sinc_resampler_avx2.cc
-      src/modules/audio_processing/aec3/adaptive_fir_filter_erl_avx2.cc
-      src/modules/audio_processing/aec3/adaptive_fir_filter_avx2.cc
-      src/modules/audio_processing/aec3/fft_data_avx2.cc
-      src/modules/audio_processing/aec3/matched_filter_avx2.cc
-      src/modules/audio_processing/aec3/vector_math_avx2.cc
-      src/modules/audio_processing/agc2/rnn_vad/rnn_vector_math_avx2.cc
   )
+
+  # AVX2 sources run only after a runtime CPU check, so only they get AVX2/FMA
+  set(WEBRTC_AEC3_AVX2_SOURCES
+    src/common_audio/resampler/sinc_resampler_avx2.cc
+    src/modules/audio_processing/aec3/adaptive_fir_filter_erl_avx2.cc
+    src/modules/audio_processing/aec3/adaptive_fir_filter_avx2.cc
+    src/modules/audio_processing/aec3/fft_data_avx2.cc
+    src/modules/audio_processing/aec3/matched_filter_avx2.cc
+    src/modules/audio_processing/aec3/vector_math_avx2.cc
+    src/modules/audio_processing/agc2/rnn_vad/rnn_vector_math_avx2.cc
+  )
+  target_sources(webrtc_aec3 PRIVATE ${WEBRTC_AEC3_AVX2_SOURCES})
+  if(NOT MSVC)
+    set_source_files_properties(${WEBRTC_AEC3_AVX2_SOURCES}
+      PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma"
+    )
+  endif()
 endif()
 
 # ##############################################################################
 # Dependencies
 
 if (NOT (WIN32 OR CYGWIN OR MINGW))
-  # math library
-  find_library(MATH_LIBRARY m REQUIRED)
-  target_link_libraries(webrtc_aec3 PRIVATE "${MATH_LIBRARY}")
+  # AEC3 calls libm functions (sqrt(), sin(), ...), a separate library
+  # on these systems that the final link needs. Linked by name so that a
+  # cross toolchain picks the libm matching its CPU flags; a Generic one
+  # resolves -lm through its multilib specs, where find_library() does
+  # not look.
+  find_library(MATH_LIBRARY m)
+  if(MATH_LIBRARY OR CMAKE_SYSTEM_NAME STREQUAL "Generic")
+    target_link_libraries(webrtc_aec3 PRIVATE m)
+  endif()
 elseif(NOT CMAKE_SYSTEM_NAME MATCHES "Windows(Store|Phone)")
   target_link_libraries(webrtc_aec3 PRIVATE winmm)
+endif()
+
+# logging uses __android_log_print
+if(ANDROID)
+  target_link_libraries(webrtc_aec3 PUBLIC log)
 endif()

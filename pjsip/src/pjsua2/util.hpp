@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2013-2026 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,12 +34,50 @@ inline pj_str_t str2Pj(const string &input_str)
     return output_str;
 }
 
+inline pj_str_t str2PjDup(pj_pool_t *pool, const string &input_str)
+{
+    pj_str_t src = str2Pj(input_str);
+    pj_str_t output_str = {NULL, 0};
+
+    pj_strdup(pool, &output_str, &src);
+    return output_str;
+}
+
 inline string pj2Str(const pj_str_t &input_str)
 {
     if (input_str.ptr && input_str.slen>0)
         return string(input_str.ptr, input_str.slen);
     return string();
 }
+
+inline pj_status_t parseCallSdp(pj_pool_t *pool, const string &text,
+                               pjmedia_sdp_session **sdp)
+{
+    pj_str_t source = str2Pj(text);
+    pj_str_t copy;
+
+    pj_strdup(pool, &copy, &source);
+    return pjmedia_sdp_parse(pool, copy.ptr, copy.slen, sdp);
+}
+
+class PoolGuard
+{
+public:
+    PoolGuard(const char *name, const char *operation);
+
+    ~PoolGuard()
+    {
+        if (pool_)
+            pj_pool_release(pool_);
+    }
+
+    pj_pool_t *get() const { return pool_; }
+
+private:
+    PoolGuard(const PoolGuard &);
+    PoolGuard &operator=(const PoolGuard &);
+    pj_pool_t *pool_;
+};
 
 class AudioMediaHelper : public AudioMedia
 {

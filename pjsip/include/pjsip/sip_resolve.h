@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -164,6 +164,11 @@ PJ_BEGIN_DECL
  * implementation needs feature from PJLIB-UTL DNS resolver, it has to create
  * its own PJLIB-UTL DNS resolver instance.
  *
+ * The addresses reported by the external resolver are used in its order,
+ * except that the servers marked as failed are listed last while
+ * pjsip_cfg()->endpt.server_failover is enabled, as with the other
+ * resolvers, see #pjsip_resolver_set_server_failed().
+ *
  * \section PJSIP_RESOLVE_REFERENCE Reference
  *
  * Reference:
@@ -309,6 +314,74 @@ PJ_DECL(pj_status_t) pjsip_resolver_set_ext_resolver(
 PJ_DECL(pj_dns_resolver*) pjsip_resolver_get_resolver(pjsip_resolver_t *res);
 
 /**
+ * Get the external resolver implementation of the SIP resolver engine.
+ *
+ * Note that application normally will use #pjsip_endpt_get_ext_resolver()
+ * instead since it does not normally have access to the SIP resolver
+ * instance.
+ *
+ * @param res       The SIP resolver engine.
+ *
+ * @return          The external resolver implementation (may be NULL)
+ */
+PJ_DECL(pjsip_ext_resolver*) pjsip_resolver_get_ext_resolver(
+                                                pjsip_resolver_t *res);
+
+/**
+ * Mark a server address as failed for the specified duration, or clear the
+ * mark. The mark applies to the IP address and port, whatever the transport
+ * type. While marked, and while pjsip_cfg()->endpt.server_failover is
+ * enabled, the address is listed after the other addresses when the
+ * resolver resolves a target to it, and #pjsip_endpt_send_request() tries
+ * it last when another server has failed. The order of the addresses
+ * given by the external resolver, if any, is not changed, and an IP version
+ * preference in the transport selector comes first.
+ *
+ * When pjsip_cfg()->endpt.server_failover is enabled, for requests sent with
+ * #pjsip_endpt_send_request() the library marks an address that doesn't
+ * answer, or answers 503 with Retry-After, or can't be sent to, e.g: its TCP
+ * connection is refused, while another address answers. It clears the mark
+ * when the address answers.
+ *
+ * Note that application normally will use #pjsip_endpt_set_server_failed()
+ * instead.
+ *
+ * @param res       The SIP resolver engine.
+ * @param addr      The server address.
+ * @param duration  Number of seconds to keep the mark, at most 30 days, or
+ *                  zero to clear it.
+ *
+ * @return          PJ_SUCCESS on success.
+ */
+PJ_DECL(pj_status_t) pjsip_resolver_set_server_failed(
+                                            pjsip_resolver_t *res,
+                                            const pj_sockaddr_t *addr,
+                                            unsigned duration);
+
+/**
+ * Check whether a server address is marked as failed, see
+ * #pjsip_resolver_set_server_failed().
+ *
+ * @param res       The SIP resolver engine.
+ * @param addr      The server address.
+ *
+ * @return          PJ_TRUE if the address is marked as failed.
+ */
+PJ_DECL(pj_bool_t) pjsip_resolver_is_server_failed(pjsip_resolver_t *res,
+                                                   const pj_sockaddr_t *addr);
+
+/**
+ * Clear all failed server marks, including the ones set by the application,
+ * e.g: after the local network has changed.
+ *
+ * @param res       The SIP resolver engine.
+ *
+ * @return          PJ_SUCCESS on success.
+ */
+PJ_DECL(pj_status_t) pjsip_resolver_clear_failed_servers(
+                                            pjsip_resolver_t *res);
+
+/**
  * Destroy resolver engine. Note that this will also destroy the internal
  * DNS resolver inside the engine. If application doesn't want the internal
  * DNS resolver to be destroyed, it should set the internal DNS resolver
@@ -344,6 +417,21 @@ PJ_DECL(void) pjsip_resolve( pjsip_resolver_t *resolver,
 /**
  * @}
  */
+
+/**
+ * Internal API for the stateful send: the number of times the failed
+ * servers were cleared.
+ */
+unsigned pjsip_resolver_failed_servers_gen(pjsip_resolver_t *res);
+
+/**
+ * Internal API for the stateful send: mark a server as failed, unless the
+ * failed servers were cleared since the request that failed was sent.
+ */
+pj_status_t pjsip_resolver_set_server_failed_gen(pjsip_resolver_t *res,
+                                                 const pj_sockaddr_t *addr,
+                                                 unsigned duration,
+                                                 unsigned gen);
 
 PJ_END_DECL
 

@@ -16,14 +16,17 @@ if(@PJ_APPLE@)
   find_dependency(AppleFoundation)
 endif()
 
-# SSL/TLS backend (mutually exclusive)
+# SSL/TLS backend (mutually exclusive). OpenSSL is also needed by the bundled
+# srtp, for AES-GCM, whichever backend pjlib uses.
 set(_pj_ssl_backend "@PJLIB_WITH_SSL@")
-if(_pj_ssl_backend STREQUAL "openssl")
+if(_pj_ssl_backend STREQUAL "openssl" OR
+   ("@PJ_SRTP_WITH_OPENSSL@" AND "@PJ_DEP_SRTP@" STREQUAL "bundled"))
   find_package(OpenSSL COMPONENTS Crypto SSL MODULE QUIET)
   if(NOT OpenSSL_FOUND AND NOT OPENSSL_FOUND)
     find_dependency(OpenSSL COMPONENTS Crypto SSL)
   endif()
-elseif(_pj_ssl_backend STREQUAL "gnutls")
+endif()
+if(_pj_ssl_backend STREQUAL "gnutls")
   find_dependency(GnuTLS)
 elseif(_pj_ssl_backend STREQUAL "mbedtls")
   find_dependency(MbedTLS CONFIG)
@@ -47,16 +50,18 @@ endif()
 if(@PJMEDIA_WITH_AUDIODEV_ALSA@)
   find_dependency(ALSA)
 endif()
+if(@PJMEDIA_WITH_AUDIODEV_OBOE@)
+  find_dependency(Oboe)
+endif()
+if(@PJMEDIA_WITH_AUDIODEV_WASAPI@)
+  find_dependency(WASAPI)
+endif()
 
 # Video device backends
 if(@PJMEDIA_WITH_VIDEODEV_OPENGL@)
-  # iOS has no GL or GLES2 library for FindOpenGL to find; the ES
-  # implementation is a framework, which FindOpenGLES locates instead.
-  if(@PJ_IOS@)
-    find_dependency(OpenGLES)
-  else()
-    find_dependency(OpenGL)
-  endif()
+  # Neither iOS nor Android can be served by FindOpenGL, so both were built
+  # against FindOpenGLES instead. Re-resolve whichever one was used.
+  find_dependency(@PJ_OPENGL_PACKAGE@)
 endif()
 if(@PJMEDIA_WITH_VIDEODEV_SDL@)
   find_dependency(SDL2)
@@ -71,8 +76,8 @@ if(@PJMEDIA_WITH_VIDEODEV_METAL@)
   find_dependency(Metal)
 endif()
 
-# AEC backends
-if(@PJMEDIA_WITH_SPEEX_AEC@)
+# SpeexDSP, needed with system speex only
+if(@PJMEDIA_NEEDS_SPEEXDSP@)
   find_dependency(SpeexDSP)
 endif()
 
@@ -116,6 +121,9 @@ if(@PJMEDIA_WITH_OPEN_H264_CODEC@)
 endif()
 if(@PJMEDIA_WITH_VID_TOOLBOX_CODEC@)
   find_dependency(VideoToolbox)
+endif()
+if(@PJMEDIA_WITH_ANDROID_MEDIACODEC_CODEC@)
+  find_dependency(MediaNDK)
 endif()
 if(@PJ_APPLE@ AND @PJMEDIA_WITH_ILBC_CODEC@)
   find_dependency(AudioToolbox)

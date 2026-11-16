@@ -1,5 +1,5 @@
 /* 
- * Copyright (C) 2008-2011 Teluu Inc. (http://www.teluu.com)
+ * Copyright (C) 2008-2026 Teluu Inc. (http://www.teluu.com)
  * Copyright (C) 2003-2008 Benny Prijono <benny@prijono.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -422,6 +422,11 @@ PJ_DEF(pj_status_t) pjsip_endpt_add_capability( pjsip_endpoint *endpt,
             return PJ_ENOMEM;
         }
         pj_list_push_back(&endpt->cap_hdr, hdr);
+    } else if (hdr->count + count > PJ_ARRAY_SIZE(hdr->values)) {
+        PJ_LOG(2,(THIS_FILE, "Unable to add %u capabilities: not enough "
+                  "room in %.*s header", count, (int)hdr->name.slen,
+                  hdr->name.ptr));
+        return PJ_ETOOMANY;
     }
 
     /* Add the tags to the header. */
@@ -1343,6 +1348,16 @@ PJ_DEF(pj_dns_resolver*) pjsip_endpt_get_resolver(pjsip_endpoint *endpt)
 }
 
 /*
+ * Get the external resolver implementation.
+ */
+PJ_DEF(pjsip_ext_resolver*) pjsip_endpt_get_ext_resolver(
+                                                pjsip_endpoint *endpt)
+{
+    PJ_ASSERT_RETURN(endpt, NULL);
+    return pjsip_resolver_get_ext_resolver(endpt->resolver);
+}
+
+/*
  * Resolve
  */
 PJ_DEF(void) pjsip_endpt_resolve( pjsip_endpoint *endpt,
@@ -1352,6 +1367,46 @@ PJ_DEF(void) pjsip_endpt_resolve( pjsip_endpoint *endpt,
                                   pjsip_resolver_callback *cb)
 {
     pjsip_resolve( endpt->resolver, pool, target, token, cb);
+}
+
+/*
+ * Set or clear a failed server address.
+ */
+PJ_DEF(pj_status_t) pjsip_endpt_set_server_failed(pjsip_endpoint *endpt,
+                                                  const pj_sockaddr_t *addr,
+                                                  unsigned duration)
+{
+    return pjsip_resolver_set_server_failed(endpt->resolver, addr, duration);
+}
+
+/*
+ * Check whether a server address has failed.
+ */
+PJ_DEF(pj_bool_t) pjsip_endpt_is_server_failed(pjsip_endpoint *endpt,
+                                               const pj_sockaddr_t *addr)
+{
+    return pjsip_resolver_is_server_failed(endpt->resolver, addr);
+}
+
+/*
+ * Forget all failed server addresses.
+ */
+PJ_DEF(pj_status_t) pjsip_endpt_clear_failed_servers(pjsip_endpoint *endpt)
+{
+    return pjsip_resolver_clear_failed_servers(endpt->resolver);
+}
+
+unsigned pjsip_endpt_failed_servers_gen(pjsip_endpoint *endpt)
+{
+    return pjsip_resolver_failed_servers_gen(endpt->resolver);
+}
+
+pj_status_t pjsip_endpt_set_server_failed_gen(pjsip_endpoint *endpt,
+                                              const pj_sockaddr_t *addr,
+                                              unsigned duration, unsigned gen)
+{
+    return pjsip_resolver_set_server_failed_gen(endpt->resolver, addr,
+                                                duration, gen);
 }
 
 /*
