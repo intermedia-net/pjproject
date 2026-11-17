@@ -42,9 +42,9 @@ jobs:
 
       - name: Build library
         run: |
-          mkdir -p output
-          cd /home
-          ./build
+          /home/tools/pjproject/android_framework/build_android.sh \
+            --source-dir=/home/tools/pjproject \
+            --output-dir=/home/output/pjsip-build-output
           
       - name: Create asset
         if: always()
